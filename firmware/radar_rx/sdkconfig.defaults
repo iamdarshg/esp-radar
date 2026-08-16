@@ -17,3 +17,16 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
 # Keep the UART console reachable for diagnostics.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# RX2 is the ESP32-CAM, the only PSRAM-equipped board in the head; RX1 (DevKit)
+# has none. radar_rx/src/link.rs calls esp_psram_is_initialized() to distinguish
+# them. That symbol is only compiled into libesp_psram.a when CONFIG_SPIRAM=y
+# (esp_psram/CMakeLists.txt guards `srcs` with `if(CONFIG_SPIRAM)`), so without
+# it the release link fails with `undefined reference to esp_psram_is_initialized`.
+# CONFIG_SPIRAM also auto-selects CONFIG_SPIRAM_BOOT_INIT, so the boot calls
+# esp_psram_init(). IGNORE_NOTFOUND makes a missing PSRAM chip (RX1, and QEMU
+# with no PSRAM model) non-fatal: init fails, esp_psram_is_initialized() returns
+# false, and resolve_role falls through to RX1. On RX2 init succeeds and the
+# inference resolves to RX2.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
