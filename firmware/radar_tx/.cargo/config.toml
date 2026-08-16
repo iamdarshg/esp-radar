@@ -15,13 +15,16 @@ target = "xtensa-esp32-espidf"
 # long, so device builds land in a short side-directory instead.
 target-dir = "C:/rt"
 
-# esp-idf-sys 0.37 links through the ldproxy linker wrapper: its build script
-# emits `cargo:rustc-link-arg=--ldproxy-linker <gcc>`, `--ldproxy-cwd <dir>` and
-# `@<out>/linker_args.txt`. That response file carries the native libs and all
-# `-T *.ld` scripts in the correct order. Without this, rustc invokes
-# `xtensa-esp-32-elf-gcc` directly and `--as-needed` drops the response-file
-# libs, so the release link fails with undefined pthread_*/open/read/memcpy/...
-# refs. (See firmware/radar_tx/build_tx3.log — EXIT=101.)
+# esp-idf-sys 0.37 links through the ldproxy linker wrapper. `linker = "ldproxy"`
+# makes rustc invoke ldproxy for the final binary link, and radar_tx/build.rs
+# (`embuild::espidf::sysenv::output()`) re-emits esp-idf-sys's link args
+# (`--ldproxy-linker <gcc>`, `--ldproxy-cwd <dir>`, `@<out>/linker_args.txt`)
+# from this bin crate's OWN build script — cargo does not forward
+# `cargo:rustc-link-arg` from a dependency rlib to the top-level binary. The
+# `@linker_args.txt` response file carries the native libs (newlib, pthread,
+# gcc, esp-idf component archives) and all `-T *.ld` scripts. Without this the
+# release link fails: gcc invoked bare → undefined pthread_*/libc refs (tx3),
+# or ldproxy invoked with no --ldproxy-* args → panic (tx4).
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
 
