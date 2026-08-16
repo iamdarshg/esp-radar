@@ -1,0 +1,7 @@
+# Selects the Espressif Rust toolchain. No `targets` list here: the
+# xtensa-esp32-espidf target is built into the toolchain and std is compiled
+# from source via `-Zbuild-std` (see .cargo/config.toml), so no rustup
+# component install is needed (rustup can't add components to this
+# manually-linked toolchain).
+[toolchain]
+channel = "esp"

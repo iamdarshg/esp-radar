@@ -1,0 +1,47 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.bak
+managed_components/
+dependencies.lock
+idf_component.yml
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.cache/
+
+# Compiled firmware artifacts
+*.bin
+*.elf
+*.map
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+.python_env/
+python_virtual_env/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local logs / recordings (SD card captures are large)
+*.npy
+
+# Rust build output (host `cargo` target dir; firmware builds go to C:/rt)
+target/
+**/target/
+
+# esp_cargo build/check logs
+*.log

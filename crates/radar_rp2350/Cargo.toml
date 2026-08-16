@@ -1,0 +1,18 @@
+[package]
+name = "radar_rp2350"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional wired RP2350 DSP coprocessor link (UART2, GPIO17-TX/GPIO16-RX), best-effort."
+
+[features]
+# Wire protocol handling (`framer`, `session`) is pure and host-testable; the
+# UART2 link itself is device-only.
+default = []
+device = ["dep:esp-idf-hal", "dep:esp-idf-sys"]
+
+[dependencies]
+radar_protocol = { workspace = true }
+esp-idf-hal = { workspace = true, optional = true }
+esp-idf-sys = { workspace = true, optional = true }
+log = "0.4"

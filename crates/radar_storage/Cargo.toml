@@ -1,0 +1,17 @@
+[package]
+name = "radar_storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NVS-only persistence for radar config and calibration artifacts (SD-card logging deferred)."
+
+[features]
+default = []
+# Pulls in esp-idf-sys for the raw NVS API. Left off by default so the config
+# serialization can be unit-tested on the host (same pattern as radar_transport).
+device = ["dep:esp-idf-sys"]
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_calibration = { workspace = true }
+esp-idf-sys = { workspace = true, optional = true }

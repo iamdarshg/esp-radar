@@ -1,0 +1,11 @@
+[package]
+name = "radar_calibration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Fixed-head calibration: empty-room baseline, TX power model, per-link statistics."
+
+[dependencies]
+radar_dsp = { workspace = true }
+radar_protocol = { workspace = true }
+radar_features = { workspace = true }

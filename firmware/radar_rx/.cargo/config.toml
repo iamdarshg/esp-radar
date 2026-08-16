@@ -1,0 +1,22 @@
+# RADAR-RX build configuration. Same requirements as radar_tx.
+#
+# RX1 and RX2 share this binary; the node role is selected at build time via
+# `RADAR_NODE_ID` (set to `rx1` or `rx2` in the environment or config.toml)
+# or at runtime from NVS (see radar_rx/src/main.rs).
+
+[build]
+target = "xtensa-esp32-espidf"
+# esp-idf-sys refuses OUT_DIR paths longer than 88 chars on Windows (see its
+# build/common.rs). The default `D:\CodeProjects\esp-radar\target\...` is too
+# long, so device builds land in a short side-directory instead.
+target-dir = "C:/rt"
+
+# The esp toolchain is a nightly fork: there is no prebuilt std for the xtensa
+# espidf targets, so cargo compiles core/alloc/std/panic_abort from the
+# bundled rust-src at build time (-Zbuild-std).
+[unstable]
+build-std = ["core", "alloc", "std", "panic_abort"]
+
+[env]
+IDF_PATH = "C:/Espressif/frameworks/esp-idf-v5.4"
+ESP_IDF_VERSION = "5.4"

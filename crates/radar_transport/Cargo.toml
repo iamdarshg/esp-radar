@@ -1,0 +1,16 @@
+[package]
+name = "radar_transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sequence-aware transport: UDP measurement traffic (TX→RX) and feature reports (RX→TX), with gap tracking and cross-link pairing."
+
+[features]
+default = []
+# Pulls in esp-idf-sys for the raw lwIP socket binding (UDP). Left off by
+# default so the sequence/pairing logic can be unit-tested on the host.
+device = ["dep:esp-idf-sys"]
+
+[dependencies]
+radar_protocol = { workspace = true }
+esp-idf-sys = { workspace = true, optional = true }

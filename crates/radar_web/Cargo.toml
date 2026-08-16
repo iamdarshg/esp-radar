@@ -1,0 +1,21 @@
+[package]
+name = "radar_web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RADAR-TX dashboard server: HTTP + WebSocket compact binary telemetry, embedded dashboard files."
+
+[features]
+default = []
+# Pulls in esp-idf-svc for the EspHttpServer + WebSocket server. Left off by
+# default so the telemetry frame encoders can be unit-tested on the host.
+#
+# NOTE: the device module requires CONFIG_HTTPD_WS_SUPPORT=y in the firmware's
+# sdkconfig.defaults (that Kconfig enables esp-idf-svc's WebSocket server code,
+# which is cfg-gated at esp-idf-sys build time).
+device = ["dep:esp-idf-svc"]
+
+[dependencies]
+radar_features = { workspace = true }
+log = "0.4"
+esp-idf-svc = { workspace = true, optional = true }

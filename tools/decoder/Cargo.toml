@@ -1,0 +1,10 @@
+[package]
+name = "decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Offline radar frame decoder: prints captured radar_protocol frames as text or JSON, validating CRCs and resyncing after corrupt frames (spec §13)."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_transport = { workspace = true }

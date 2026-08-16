@@ -1,0 +1,35 @@
+# RADAR-TX build-time configuration (merged into sdkconfig by esp-idf-sys).
+
+# WebSocket server support for the dashboard (radar_web::server, spec §10).
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Flash size for the partition-table tooling. The default (2 MB) cannot hold the
+# OTA layout in partitions_ota.csv (factory + 2 × 1 MB OTA slots ≈ 3.1 MB); both
+# RADAR-TX boards carry 4 MB flash.
+#
+# NOTE: `CONFIG_ESPTOOLPY_FLASHSIZE` is a Kconfig *choice*, so the default must
+# select the boolean symbol (`CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y`) — writing the
+# derived string `CONFIG_ESPTOOLPY_FLASHSIZE="4MB"` is silently ignored and the
+# choice keeps its 2 MB default.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# OTA needs an OTA-capable partition layout (radar_ota, spec §13).
+#
+# NOTE on the absolute path: esp-idf-sys's native build runs idf.py with the
+# esp-idf-sys build dir as the *project dir*, so a relative custom partition
+# CSV here would be resolved against that build dir (e.g. `.../out/`) and the
+# build fails with "ninja: error: ... partitions_ota.csv ... missing". IDF
+# v5.4's partition_table/project_include.cmake short-circuits to an absolute
+# path via `IS_ABSOLUTE ${CONFIG_PARTITION_TABLE_FILENAME}`, so we spell the
+# full path out. This matches the machine-specific layout already assumed by
+# firmware/esp-env.sh and the C:/rt target-dir.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="D:/CodeProjects/esp-radar/firmware/radar_tx/partitions_ota.csv"
+
+# The main task sets up the AP, the dashboard and the OTA handler before
+# handing off to the worker tasks; give it room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# The AP stays on with the console below; nothing depends on the UART console
+# default, but keep it reachable for diagnostics.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

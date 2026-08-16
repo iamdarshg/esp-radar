@@ -1,0 +1,8 @@
+[package]
+name = "radar_protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wire format for the compact ESP32 radar head: versioned headers, CRC-16/XMODEM, global packet sequence, coprocessor protocol."
+
+[dependencies]

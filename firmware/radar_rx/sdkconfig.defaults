@@ -1,0 +1,19 @@
+# RADAR-RX build-time configuration (merged into sdkconfig by esp-idf-sys).
+#
+# RX is a CSI observation node (STA): no HTTP server, no OTA. It still needs a
+# reasonable main-task stack to set up WiFi STA + CSI capture + DSP before
+# handing off to the worker tasks, and it inherits the WiFi-CSI component from
+# the IDF that radar_csi calls into.
+
+# The main task boots the STA, CSI capture and the DSP pipeline before spawning
+# the worker tasks; give it room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Both RX boards (ESP32 DevKitC and ESP32-CAM) carry 4 MB flash; match the
+# layout the partition tooling assumes (the default 2 MB is for the single-app
+# table only and would mis-describe the real flash). Selecting the choice's bool
+# symbol — the derived `CONFIG_ESPTOOLPY_FLASHSIZE` string is ignored.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Keep the UART console reachable for diagnostics.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

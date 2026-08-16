@@ -1,0 +1,26 @@
+# RADAR-TX build configuration.
+#
+# Requires:
+#   * the `esp` Rust toolchain (installed via `espup install`)
+#   * ESP-IDF at IDF_PATH (v5.4)
+#   * the IDF tools on PATH (run `export.ps1` from the IDF install, or build
+#     from an ESP-IDF terminal)
+#
+# See docs/rust-toolchain.md for a full setup walkthrough.
+
+[build]
+target = "xtensa-esp32-espidf"
+# esp-idf-sys refuses OUT_DIR paths longer than 88 chars on Windows (see its
+# build/common.rs). The default `D:\CodeProjects\esp-radar\target\...` is too
+# long, so device builds land in a short side-directory instead.
+target-dir = "C:/rt"
+
+# The esp toolchain is a nightly fork: there is no prebuilt std for the xtensa
+# espidf targets, so cargo compiles core/alloc/std/panic_abort from the
+# bundled rust-src at build time (-Zbuild-std).
+[unstable]
+build-std = ["core", "alloc", "std", "panic_abort"]
+
+[env]
+IDF_PATH = "C:/Espressif/frameworks/esp-idf-v5.4"
+ESP_IDF_VERSION = "5.4"

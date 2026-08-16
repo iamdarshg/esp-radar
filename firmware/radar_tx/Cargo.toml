@@ -1,0 +1,39 @@
+[package]
+name = "radar_tx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RADAR-TX app: AP, measurement traffic generator, RX fusion, dashboard."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_dsp = { workspace = true }
+radar_features = { workspace = true }
+radar_calibration = { workspace = true }
+radar_csi = { workspace = true }
+radar_transport = { workspace = true, features = ["device"] }
+radar_storage = { workspace = true, features = ["device"] }
+radar_web = { workspace = true, features = ["device"] }
+radar_ota = { workspace = true, features = ["device"] }
+radar_rp2350 = { workspace = true, features = ["device"] }
+esp-idf-hal = { workspace = true }
+esp-idf-svc = { workspace = true }
+
+# The radar_* crates with `device` features pull in esp-idf-sys / esp-idf-hal /
+# esp-idf-svc; declare them here too so feature unification and the `esp-idf-sys`
+# build script behave identically to esp-idf-template projects.
+esp-idf-sys = { workspace = true }
+
+# App-level conveniences: anyhow for a single error type across ESP/NVS/lwIP
+# errors, heapless for the AP SSID/password strings the WiFi API requires,
+# log for the esp-idf logger (EspLogger::initialize_default).
+anyhow = "1"
+# Match the heapless version embedded-svc/esp-idf-svc resolve to (0.9.x): its
+# `AccessPointConfiguration` strings are `StringInner<usize, OwnedStorage<N>>`,
+# which in 0.8 is a *different* `String` struct. Two crate instances → type
+# mismatch. Pinning 0.9 unifies them.
+heapless = "0.9"
+log = "0.4"
+
+[profile.release]
+opt-level = "s"

@@ -1,0 +1,10 @@
+[package]
+name = "replay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Replays a captured radar stream over UDP to a target host/port, preserving inter-frame timing unless --fast (spec §13)."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_transport = { workspace = true }

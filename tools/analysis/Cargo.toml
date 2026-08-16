@@ -1,0 +1,10 @@
+[package]
+name = "analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Offline analysis of a captured radar stream: frame counts, rates, per-link/per-kind stats, RSSI, packet-loss estimate by seq gaps, and motion-energy summaries (spec §13)."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_transport = { workspace = true }

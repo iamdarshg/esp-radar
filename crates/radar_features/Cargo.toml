@@ -1,0 +1,10 @@
+[package]
+name = "radar_features"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-link motion features, RX1/RX2 fusion, occupancy state machine."
+
+[dependencies]
+radar_dsp = { workspace = true }
+radar_protocol = { workspace = true }

@@ -1,0 +1,61 @@
+# Workspace for the compact ESP32 CSI radar head.
+#
+# Layout:
+#   crates/radar_*      shared libraries (pure crates are host-testable with `cargo test`)
+#   firmware/radar_tx   TX app: AP, traffic generator, fusion, dashboard (esp32 target)
+#   firmware/radar_rx   shared receiver app: CSI capture, DSP, features (esp32 target)
+#
+# `default-members` keeps `cargo build`/`cargo test` from the root limited to the
+# pure crates. Firmware is built from inside each firmware directory (each carries
+# its own .cargo/config.toml that selects the xtensa-esp32 target and IDF_PATH).
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/radar_protocol",
+    "crates/radar_dsp",
+    "crates/radar_features",
+    "crates/radar_calibration",
+    "crates/radar_csi",
+    "crates/radar_transport",
+    "crates/radar_storage",
+    "crates/radar_web",
+    "crates/radar_ota",
+    "crates/radar_rp2350",
+    "firmware/radar_tx",
+    "firmware/radar_rx",
+    "tools/decoder",
+    "tools/analysis",
+    "tools/replay",
+    "tools/test-generator",
+]
+default-members = [
+    "crates/radar_protocol",
+    "crates/radar_dsp",
+    "crates/radar_features",
+    "crates/radar_calibration",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+radar_protocol     = { path = "crates/radar_protocol" }
+radar_dsp          = { path = "crates/radar_dsp" }
+radar_features     = { path = "crates/radar_features" }
+radar_calibration  = { path = "crates/radar_calibration" }
+radar_csi          = { path = "crates/radar_csi" }
+radar_transport    = { path = "crates/radar_transport" }
+radar_storage      = { path = "crates/radar_storage" }
+radar_web          = { path = "crates/radar_web" }
+radar_ota          = { path = "crates/radar_ota" }
+radar_rp2350       = { path = "crates/radar_rp2350" }
+
+esp-idf-hal        = "0.46.2"
+esp-idf-svc        = "0.52.1"
+esp-idf-sys        = "0.37.2"
+
+[profile.release]
+opt-level = "s"

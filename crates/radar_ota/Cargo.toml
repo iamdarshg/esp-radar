@@ -1,0 +1,14 @@
+[package]
+name = "radar_ota"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Partition-aware firmware update via web upload."
+
+[features]
+# Device-only crate: empty (no-op) on the host, real OTA when built for target.
+default = []
+device = ["dep:esp-idf-sys"]
+
+[dependencies]
+esp-idf-sys = { workspace = true, optional = true }

@@ -1,0 +1,17 @@
+[package]
+name = "radar_csi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ESP-IDF Wi-Fi CSI capture: short RX callback feeding a preallocated ring buffer."
+
+[features]
+default = []
+# Pulls in esp-idf-sys (the ESP-IDF C bindings). Left off by default so the
+# lock-free ring can be unit-tested on the host; the receiver firmware enables
+# it (`radar_csi = { features = ["device"] }`).
+device = ["dep:esp-idf-sys"]
+
+[dependencies]
+radar_protocol = { workspace = true }
+esp-idf-sys = { workspace = true, optional = true }

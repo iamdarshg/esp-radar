@@ -1,0 +1,10 @@
+[package]
+name = "test-generator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Synthesizes a deterministic radar test stream (data frames, feature reports, CSI snapshots) to stdout or a UDP target, for exercising the pipeline and dashboard without hardware (spec §13)."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_transport = { workspace = true }

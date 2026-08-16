@@ -1,0 +1,33 @@
+[package]
+name = "radar_rx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RADAR-RX app (shared by RX1 and RX2): CSI capture, DSP, features, feature reports."
+
+[dependencies]
+radar_protocol = { workspace = true }
+radar_dsp = { workspace = true }
+radar_features = { workspace = true }
+radar_calibration = { workspace = true }
+radar_csi = { workspace = true, features = ["device"] }
+radar_transport = { workspace = true, features = ["device"] }
+radar_storage = { workspace = true, features = ["device"] }
+esp-idf-hal = { workspace = true }
+esp-idf-svc = { workspace = true }
+
+# The `device` features above pull in esp-idf-sys / esp-idf-hal / esp-idf-svc;
+# declare esp-idf-sys here too so the bindings (esp_psram_is_initialized, the
+# WiFi CSI functions via radar_csi) and the `link_patches` bootstrap resolve.
+esp-idf-sys = { workspace = true }
+
+# App-level conveniences: anyhow for a single error type, heapless for the
+# SSID strings the WiFi STA API requires, log for the esp-idf logger.
+anyhow = "1"
+# Match the heapless version embedded-svc/esp-idf-svc resolve to (0.9.x), so
+# the STA SSID strings we build are the same type the API expects.
+heapless = "0.9"
+log = "0.4"
+
+[profile.release]
+opt-level = "s"
