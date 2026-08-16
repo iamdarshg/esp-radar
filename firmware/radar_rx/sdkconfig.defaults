@@ -18,6 +18,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # Keep the UART console reachable for diagnostics.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 
+# Nano-format newlib printf (Task 4 size pass, shared with radar_tx). Same
+# rationale: small images, and float logging goes through Rust's fmt anyway.
+CONFIG_NEWLIB_NANO_FORMAT=y
+
 # RX2 is the ESP32-CAM, the only PSRAM-equipped board in the head; RX1 (DevKit)
 # has none. radar_rx/src/link.rs calls esp_psram_is_initialized() to distinguish
 # them. That symbol is only compiled into libesp_psram.a when CONFIG_SPIRAM=y

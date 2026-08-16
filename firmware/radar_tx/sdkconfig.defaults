@@ -33,3 +33,9 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # The AP stays on with the console below; nothing depends on the UART console
 # default, but keep it reachable for diagnostics.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# Nano-format newlib printf (Task 4 size pass). The app image must fit 1 MB
+# factory/OTA slots; the full `_vfprintf_r`/`_svfprintf_r` printf was ~22 KB.
+# Nano-format covers every format specifier the firmware's logging uses (all
+# integer/string; float logging goes through Rust's own fmt, not newlib).
+CONFIG_NEWLIB_NANO_FORMAT=y

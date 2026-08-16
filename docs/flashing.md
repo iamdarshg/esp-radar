@@ -28,28 +28,47 @@ C:/rt/xtensa-esp32-espidf/release/radar_tx    <- RADAR-TX app
 C:/rt/xtensa-esp32-espidf/release/radar_rx    <- RADAR-RX1 / RADAR-RX2 app
 ```
 
+For serial flashing, the release pipeline also produces **merged flash images**
+(`.scratch/flash/radar_tx_merged.bin`, `.scratch/flash/radar_rx_merged.bin` —
+bootloader + partition table + app in one file) that `esptool` writes in a
+single shot; see "Serial flashing" below.
+
 ## Serial flashing (RADAR-TX, RADAR-RX1)
 
 Both DevKit boards expose a USB-UART bridge, so they flash the standard way.
-From the firmware directory (with `firmware/esp-env.sh` sourced), flash the
-built app with the ESP-IDF-Rust flash tool:
+The deterministic deliverable is a **merged flash image** (bootloader +
+partition table + app concatenated at their fixed offsets in one file),
+programmed with `esptool`:
 
 ```bash
-cd firmware/radar_tx        # or firmware/radar_rx
-espflash flash --monitor C:/rt/xtensa-esp32-espidf/release/radar_tx
+# RADAR-TX (left DevKit) — OTA-capable table (factory + ota_0 + ota_1)
+esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_tx_merged.bin
+
+# RADAR-RX1 (middle DevKit) — default single-app table
+esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_rx_merged.bin
 ```
 
-* `espflash` is on `PATH` once `esp-env.sh` is sourced; point it at the built
-  ELF explicitly (the target dir is the short `C:/rt/`, not the firmware's own
-  `target/`). Do NOT route it through `esp_cargo` — that wrapper runs
-  `cargo <args>` verbatim and only takes cargo invocations.
+* The merged images are built by the release pipeline
+  (`docs/architecture.md` / Task 4 of the QEMU-validation plan): the workspace
+  root `[profile.release]` (`opt-level = "z"`, `lto = "fat"`,
+  `codegen-units = 1`, `panic = "immediate-abort"`) plus newlib nano-format in
+  both `sdkconfig.defaults` keep radar_tx's app image at 1,038,528 B — under
+  its 1 MB factory/OTA slots (radar_rx: 929,344 B). `esptool merge_bin` packs
+  bootloader@0x1000, the explicitly generated partition table@0x8000 and the
+  app (0x10000 or 0x20000) into a single image written at offset 0x0 — a blank
+  chip boots straight off one write.
+* `esptool` (esptool.py v4.7.0) is on the Python 3.12 Scripts `PATH` once
+  `firmware/esp-env.sh` is sourced. `espflash` is **not installed** in this
+  build environment; if it is installed later it can flash the ELF directly
+  instead (`espflash flash --monitor C:/rt/xtensa-esp32-espidf/release/radar_tx`),
+  but the merged image + `write_flash` above is the verified path.
 * **RADAR-TX** uses a custom two-slot OTA partition table
-  (`firmware/radar_tx/partitions_ota.csv`). The build encodes it via
-  `ESP_IDF_SDKCONFIG_DEFAULTS`, so `espflash` uses the right layout; if a
-  future tool needs it explicitly, pass `--partition-table partitions_ota.csv`
-  from `firmware/radar_tx`. RADAR-RX uses the default partition table.
-* Select the board's serial port when prompted (on Windows this is a COM port).
-* For a recovery/erase, `espflash erase-flash` followed by a fresh flash works.
+  (`firmware/radar_tx/partitions_ota.csv`) — the `radar_tx_merged.bin` table is
+  generated from it explicitly. RADAR-RX uses the default single-app table
+  (`.scratch/flash/rx_default-partition-table.bin`).
+* Select the board's serial port for `--port` (on Windows this is a COM port).
+* For a recovery/erase, `esptool --chip esp32 --port <COM> erase_flash` followed
+  by a fresh `write_flash` works.
 
 ## ESP32-CAM via the middle DevKit (RADAR-RX2)
 
@@ -114,8 +133,7 @@ at boot from PSRAM presence). Use the serial port of the middle DevKit in place
 of a native port:
 
 ```bash
-cd firmware/radar_rx
-espflash flash --monitor C:/rt/xtensa-esp32-espidf/release/radar_rx
+esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_rx_merged.bin
 ```
 
 After boot, the ESP32-CAM detects its PSRAM, infers the `RADAR-RX2` role, and

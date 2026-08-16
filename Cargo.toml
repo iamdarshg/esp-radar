@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 # Workspace for the compact ESP32 CSI radar head.
 #
 # Layout:
@@ -58,4 +60,23 @@ esp-idf-svc        = "0.52.1"
 esp-idf-sys        = "0.37.2"
 
 [profile.release]
-opt-level = "s"
+# Size ladder (Task 4 of the QEMU-validation plan) to squeeze radar_tx's app
+# image below its 1 MB factory/OTA slots:
+#   opt-level="s"+lto="thin"            -> 1,137,648 B  (over 1,048,576)
+#   +codegen-units=1                     -> 1,132,848 B  (over)
+#   +panic="abort"                       -> 1,132,896 B  (over; target has no
+#                                                        .eh_frame, so abort
+#                                                        saved nothing)
+# Final: panic="immediate-abort" (the modern replacement for the removed
+# panic_immediate_abort build-std feature) drops std's DWARF
+# backtrace-symbolization machinery (gimli/addr2line, ~50 KB) -> radar_tx
+# finally fits its 1 MB factory/OTA slots.
+# Per-package [profile.release] blocks are ignored by cargo, so this must live
+# at the workspace root and applies to both firmware.
+opt-level = "z"
+# fat LTO (vs thin) prunes the last of std's dead DWARF-symbolizer code that
+# thin+codegen-units=1 kept; combined with newlib nano-format in both
+# sdkconfig.defaults this closes the final ~27 KB of the 1 MB gap.
+lto = "fat"
+codegen-units = 1
+panic = "immediate-abort"
