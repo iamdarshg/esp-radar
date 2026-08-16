@@ -35,5 +35,11 @@ anyhow = "1"
 heapless = "0.9"
 log = "0.4"
 
+[build-dependencies]
+# Provides `embuild::espidf::sysenv::output()` in build.rs, which re-emits
+# esp-idf-sys's native link args (--ldproxy-linker / --ldproxy-cwd /
+# @linker_args.txt) for this bin target. Without it the release link fails.
+embuild = { version = "0.33", features = ["espidf"] }
+
 [profile.release]
 opt-level = "s"

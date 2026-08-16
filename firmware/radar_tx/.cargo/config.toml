@@ -15,6 +15,16 @@ target = "xtensa-esp32-espidf"
 # long, so device builds land in a short side-directory instead.
 target-dir = "C:/rt"
 
+# esp-idf-sys 0.37 links through the ldproxy linker wrapper: its build script
+# emits `cargo:rustc-link-arg=--ldproxy-linker <gcc>`, `--ldproxy-cwd <dir>` and
+# `@<out>/linker_args.txt`. That response file carries the native libs and all
+# `-T *.ld` scripts in the correct order. Without this, rustc invokes
+# `xtensa-esp-32-elf-gcc` directly and `--as-needed` drops the response-file
+# libs, so the release link fails with undefined pthread_*/open/read/memcpy/...
+# refs. (See firmware/radar_tx/build_tx3.log — EXIT=101.)
+[target.xtensa-esp32-espidf]
+linker = "ldproxy"
+
 # The esp toolchain is a nightly fork: there is no prebuilt std for the xtensa
 # espidf targets, so cargo compiles core/alloc/std/panic_abort from the
 # bundled rust-src at build time (-Zbuild-std).
