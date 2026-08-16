@@ -1,0 +1,20 @@
+[package]
+name = "integration"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Integrated multi-node inter-chip comms test: runs TX / RX1 / RX2 as separate host processes over loopback UDP and asserts the RATE-1/2/3 flows (Task 6)."
+
+# Standalone workspace: this tool deliberately lives OUTSIDE the repository
+# workspace so it can be built with the default (debug) profile on the host
+# without touching the workspace-root [profile.release] that is load-bearing
+# for the firmware (Task 4). `cargo build` from inside this directory uses
+# `tools/integration/target/`, not the firmware's `C:/rt`.
+[workspace]
+
+[dependencies]
+radar_protocol = { path = "../../crates/radar_protocol" }
+radar_transport = { path = "../../crates/radar_transport" }
+radar_dsp = { path = "../../crates/radar_dsp" }
+radar_features = { path = "../../crates/radar_features" }
+radar_calibration = { path = "../../crates/radar_calibration" }
