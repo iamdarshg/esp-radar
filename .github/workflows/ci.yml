@@ -44,7 +44,9 @@ jobs:
           - radar_rp2350
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-07-15
       - uses: Swatinem/rust-cache@v2
       - name: Build & test ${{ matrix.crate }}
         run: cargo test -p ${{ matrix.crate }} --locked
@@ -57,7 +59,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-07-15
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/integration
@@ -72,8 +76,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
+      - uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-07-15
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt check
