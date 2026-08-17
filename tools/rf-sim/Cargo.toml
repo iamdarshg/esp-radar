@@ -1,0 +1,20 @@
+[package]
+name = "rf-sim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "RF phase-coherent CSI simulator for the ESP-RADAR head: generates burnable simdata blobs from RF scenarios (target trajectory + multipath + CFO + noise + i8 quantization) and measures the real firmware's phase/displacement/velocity errors from its emitted CSI_PHASE telemetry, against analytic floors."
+
+# Standalone workspace: lives OUTSIDE the repository workspace so it builds
+# with the host debug profile without touching the workspace-root
+# [profile.release] that is load-bearing for the firmware (see tools/em-sim
+# and tools/integration for the same pattern). `cargo build` from inside this
+# directory uses `tools/rf-sim/target/`, not the firmware's `C:/rt`.
+[workspace]
+
+[dependencies]
+radar_protocol = { path = "../../crates/radar_protocol" }
+radar_transport = { path = "../../crates/radar_transport" }
+radar_dsp = { path = "../../crates/radar_dsp" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

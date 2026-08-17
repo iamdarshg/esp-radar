@@ -66,8 +66,11 @@ pub struct RadarConfig {
     pub antenna_offset_txrx2_mm: u16,
     /// Extra subcarrier shift applied at CSI capture (per-link trim).
     pub csi_shift: u8,
+    /// 1 = QEMU RF-sim mode: skip WiFi bring-up and feed the CSI ring from the
+    /// `simdata` flash partition (quantification runs). 0 = normal operation.
+    pub sim_mode: u8,
     /// Spare bytes — keep for ABI stability when extending.
-    pub reserved: [u8; 3],
+    pub reserved: [u8; 2],
 }
 
 impl Default for RadarConfig {
@@ -83,13 +86,15 @@ impl Default for RadarConfig {
             antenna_offset_txrx1_mm: 0,
             antenna_offset_txrx2_mm: 0,
             csi_shift: 0,
-            reserved: [0; 3],
+            sim_mode: 0,
+            reserved: [0; 2],
         }
     }
 }
 
 impl RadarConfig {
-    /// 4 (version) + 1 + 2 + 2 + 2 + 1 + 1 + 2 + 2 + 1 + 3 (reserved) = 21 bytes.
+    /// 4 (version) + 1 + 2 + 2 + 2 + 1 + 1 + 2 + 2 + 1 + 1 (sim_mode)
+    /// + 2 (reserved) = 21 bytes — byte-compatible with the pre-sim layout.
     pub const SERIALIZED_LEN: usize = 4 + 1 + 2 + 2 + 2 + 1 + 1 + 2 + 2 + 1 + 3;
 
     /// Little-endian encoding matching the field layout above.
@@ -116,7 +121,9 @@ impl RadarConfig {
         o += 2;
         out[o] = self.csi_shift;
         o += 1;
-        out[o..o + 3].copy_from_slice(&self.reserved);
+        out[o] = self.sim_mode;
+        o += 1;
+        out[o..o + 2].copy_from_slice(&self.reserved);
         out
     }
 
@@ -152,7 +159,9 @@ impl RadarConfig {
         c.antenna_offset_txrx2_mm = read_u16(&mut o);
         c.csi_shift = b[o];
         o += 1;
-        c.reserved.copy_from_slice(&b[o..o + 3]);
+        c.sim_mode = b[o];
+        o += 1;
+        c.reserved.copy_from_slice(&b[o..o + 2]);
         c
     }
 }
@@ -196,10 +205,41 @@ mod tests {
             antenna_offset_txrx1_mm: 55,
             antenna_offset_txrx2_mm: 42,
             csi_shift: 1,
-            reserved: [7, 8, 9],
+            sim_mode: 1,
+            reserved: [7, 8],
         };
         let bytes = c.to_bytes();
         assert_eq!(RadarConfig::from_bytes(&bytes), c);
+    }
+
+    #[test]
+    fn config_byte_layout_is_backward_compatible() {
+        // The pre-sim blob (21 bytes, sim_mode byte = the old reserved[0] = 0)
+        // must decode to sim_mode 0 — i.e. normal operation — with the same size.
+        let legacy = [
+            0x01, 0x00, 0x00, 0x00, // version
+            0x06, // channel
+            0xc8, 0x00, // rate 200
+            0x14, 0x00, // report_every 20
+            0x0a, 0x00, // pair_tol 10
+            0x00, // tx_power
+            0x03, // node_role RX2
+            0x00, 0x00, 0x00, 0x00, // ant offsets
+            0x00, // csi_shift
+            0x00, 0x00, 0x00, // reserved[0..3] (old layout)
+        ];
+        assert_eq!(legacy.len(), 21);
+        let c = RadarConfig::from_bytes(&legacy);
+        assert_eq!(c.sim_mode, 0);
+        assert_eq!(c.node_role, node::RX2);
+        assert_eq!(c.channel, 6);
+        // And a sim blob: set the byte that used to be reserved[0] (offset 18)
+        // to 1 — decodes as sim_mode=1 with the same size.
+        let mut sim = legacy;
+        sim[18] = 1;
+        let c2 = RadarConfig::from_bytes(&sim);
+        assert_eq!(c2.sim_mode, 1);
+        assert_eq!(c2.reserved, [0, 0]);
     }
 
     #[test]

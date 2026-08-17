@@ -15,22 +15,31 @@ use esp_idf_hal::delay::TickType;
 use esp_idf_hal::gpio::{Gpio0, InputPin, OutputPin};
 use esp_idf_hal::uart::{self, UART1, UartDriver};
 use esp_idf_hal::units::Hertz;
-use radar_protocol::{CalResp, CsiSnapshot, FeatureReport, HEADER_SIZE, MAX_PAYLOAD};
+use radar_protocol::{
+    CalResp, CsiSnapshot, FeatureReport, HEADER_SIZE, MAX_PAYLOAD, N_SUBCARRIERS,
+};
 use radar_transport::framer::{RadarFrame, RadarFrameDecoder, MAX_FRAME};
 use radar_transport::udp::now_us;
-use radar_transport::{build_cal_resp, build_csi_snapshot, build_feature_report};
+use radar_transport::{
+    build_cal_resp, build_csi_phase, build_csi_snapshot, build_feature_report,
+};
 
 /// Link baud. 460800 puts a full CSI snapshot (~380 B) on the wire in well
 /// under 10 ms; drop to 230400 if the physical build shows CRC errors.
 pub const DEFAULT_BAUD: u32 = 460_800;
 /// Per-read blocking window while polling for inbound frames. Short so the
-/// radar loop's UDP recv timeout still paces the cycle.
+/// radar loop's UDP recv timeout still paces the cycle. Sim mode drops this
+/// to 0 (non-blocking): nothing arrives on the wire in sim mode, so blocking
+/// the full window every iteration is pure dead time that halves the frame
+/// throughput QEMU can sustain.
 const READ_POLL_MS: u64 = 5;
 
 /// UART1 link to RADAR-TX: reports/snapshots/CAL_RESP up, CAL_CMD down.
 pub struct WiredLink {
     uart: UartDriver<'static>,
     decoder: RadarFrameDecoder,
+    /// Blocking window for each inbound read (see [`READ_POLL_MS`]).
+    poll_ms: u64,
 }
 
 impl WiredLink {
@@ -49,7 +58,14 @@ impl WiredLink {
         Ok(Self {
             uart,
             decoder: RadarFrameDecoder::new(),
+            poll_ms: READ_POLL_MS,
         })
+    }
+
+    /// Override the inbound-poll blocking window. Sim mode uses 0 so the radar
+    /// loop never idles waiting for a wire that has nothing to send it.
+    pub fn set_poll_ms(&mut self, ms: u64) {
+        self.poll_ms = ms;
     }
 
     /// Read whatever has arrived and return complete, CRC-valid frames. Never
@@ -106,8 +122,24 @@ impl WiredLink {
         Ok(())
     }
 
+    /// Send a full-rate RAW per-subcarrier phase frame (sim-mode telemetry for
+    /// the RF-sim analyzer). `seq`/`t_us` live in the header and MUST be
+    /// producer-stamped: `seq` = the scenario frame index, `t_us` = the push
+    /// instant — never consume-time.
+    pub fn send_csi_phase(
+        &mut self,
+        src: u8,
+        seq: u32,
+        t_us: u64,
+        phase: &[i16; N_SUBCARRIERS],
+    ) -> Result<(), esp_idf_sys::EspError> {
+        let mut buf = [0u8; MAX_FRAME];
+        let n = build_csi_phase(&mut buf, src, seq, t_us, phase);
+        self.uart.write(&buf[..n])?;
+        Ok(())
+    }
+
     fn read_chunk(&self, buf: &mut [u8]) -> Result<usize, esp_idf_sys::EspError> {
-        self.uart
-            .read(buf, TickType::new_millis(READ_POLL_MS).ticks())
+        self.uart.read(buf, TickType::new_millis(self.poll_ms).ticks())
     }
 }

@@ -32,7 +32,7 @@ use radar_csi::{CsiFrame, CsiRing};
 use radar_dsp::filter::Biquad;
 use radar_dsp::metrics::{circular_variance, dominant_freq_hz, spectral_entropy};
 use radar_dsp::pca::Pca;
-use radar_dsp::transform::{decode_channel, Normalizer};
+use radar_dsp::transform::{decode_channel, phase_increment, Normalizer};
 use radar_dsp::{Channel, N_SUBCARRIERS};
 use radar_protocol::{cal_action, cal_result, cal_stage, frame_type, CalCmd, CalResp};
 use radar_protocol::{CsiSnapshot, FeatureReport, MAX_PCA, N_SPEC_BINS};
@@ -42,6 +42,7 @@ use radar_transport::udp::{now_us, recv_radar_frame, UdpSocket};
 use radar_transport::MEASURE_PORT;
 
 use crate::link::role_name;
+use crate::sim::SimSource;
 use crate::wired::WiredLink;
 
 /// Length of the rolling PC1 history that feeds the STFT (matches the
@@ -53,6 +54,11 @@ const STFT_LEN: usize = 128;
 const PCA_REFIT_EVERY: u32 = 4;
 /// HP cutoff of the human-motion band, Hz (spec §16).
 const HP_CUTOFF_HZ: f32 = 0.2;
+/// HP cutoff applied to the per-frame phase rate (radians/frame) to strip the
+/// per-board CFO — a DC bias in the phase rate that would otherwise alias to
+/// the whole unambiguous Doppler range. Target Doppler is oscillatory above
+/// ~0.2 Hz, so it survives the high-pass.
+const PHASE_HP_HZ: f32 = 0.2;
 /// LP cutoff of the human-motion band, Hz.
 const LP_CUTOFF_HZ: f32 = 5.0;
 /// Snapshot cadence: emit one every `report_every * SNAPSHOT_FACTOR` frames.
@@ -68,6 +74,9 @@ pub struct RunParams {
     pub ring: &'static CsiRing,
     pub nvs: Nvs,
     pub ap_bssid: [u8; 6],
+    /// QEMU RF-sim CSI feed (`Some` only in sim mode). The single producer for
+    /// the ring when there is no WiFi CSI callback.
+    pub sim: Option<SimSource>,
 }
 
 /// The §16 pipeline as live state: normalizer (from the stored baseline),
@@ -161,6 +170,51 @@ impl Pipeline {
     }
 }
 
+/// Coherent phase-motion tracker: per-packet [`phase_increment`] → scalar
+/// high-pass for CFO removal.
+///
+/// The raw per-packet phase advance `dphi` (radians/frame) superimposes the
+/// target Doppler on a DC offset from the carrier-frequency offset (CFO). A
+/// scalar high-pass on the rate strips that DC bias so the report's
+/// `phase_motion` (RMS) and `doppler_hz` (mean) measure the target, not the
+/// oscillator.
+struct PhaseTracker {
+    /// Previous decoded channel (the phase-increment baseline).
+    prev: Option<Channel>,
+    /// Scalar high-pass on the per-frame phase rate.
+    hp: Biquad,
+}
+
+impl PhaseTracker {
+    fn new(fs: f32) -> Self {
+        let fc = (PHASE_HP_HZ / fs).clamp(0.001, 0.49);
+        Self {
+            prev: None,
+            hp: Biquad::highpass(fc),
+        }
+    }
+
+    /// Feed one decoded channel. Returns the CFO-removed per-packet phase
+    /// increment in radians, or `None` for the very first frame (no pair yet).
+    fn process(&mut self, ch: &Channel) -> Option<f32> {
+        let prev = self.prev.take();
+        self.prev = Some(ch.clone());
+        let prev = prev?;
+        let dphi = phase_increment(&prev, ch);
+        Some(self.hp.process(dphi))
+    }
+}
+
+/// Convert a raw-phase vector to the CSI_PHASE i16 format (radians × 1000).
+fn to_mrad(phase: &[f32; N_SUBCARRIERS]) -> [i16; N_SUBCARRIERS] {
+    let mut out = [0i16; N_SUBCARRIERS];
+    for (o, &p) in out.iter_mut().zip(phase.iter()) {
+        let v = (p * 1000.0).round() as i32;
+        *o = v.clamp(-32768, 32767) as i16;
+    }
+    out
+}
+
 /// Statistics accumulated over a calibration-collection window. Fed one frame
 /// at a time; turned into a [`CalResp`] when the window's deadline passes.
 #[derive(Default)]
@@ -238,11 +292,20 @@ impl CalCollect {
 
 /// Main loop. Blocks forever.
 pub fn run(params: RunParams) -> ! {
-    let RunParams { config, node_id, link, mut wired, ring, nvs, ap_bssid } = params;
+    let RunParams { config, node_id, link, mut wired, ring, nvs, ap_bssid, mut sim } = params;
     let fs = config.tx_rate_hz as f32;
     let report_every = config.report_every.max(1) as u32;
     let snapshot_every = (report_every * SNAPSHOT_FACTOR).max(report_every);
     let name = role_name(node_id);
+
+    // Sim mode: nothing ever arrives on the wire, so the inbound poll must not
+    // block the full window every iteration — that dead time caps the frame
+    // throughput QEMU can sustain (5 ms of blocking per loop vs a 5 ms frame
+    // period is a ~2× slowdown). Make it non-blocking; `poll()` still drains
+    // the decoder buffer on every call, so a real CAL_CMD would still arrive.
+    if config.sim_mode == 1 {
+        wired.set_poll_ms(0);
+    }
 
     // The stored empty-room baseline, if CAL 3 ran on this link.
     let baseline = nvs.load_baseline(link).ok();
@@ -252,14 +315,23 @@ pub fn run(params: RunParams) -> ! {
         log::info!("{name}: no stored baseline; normalizing against raw scale until CAL 3");
     }
     let mut pipe = Pipeline::new(baseline, fs);
+    // Coherent phase-motion tracker: per-packet phase increment → scalar
+    // high-pass for CFO removal → report phase_motion/doppler_hz.
+    let mut phase_track = PhaseTracker::new(fs);
 
     // The measurement plane stays on WiFi: RATE-1 DataFrames arrive on the
     // measurement port. Reports/snapshots/CAL_RESP now go up the wired link
     // and CAL_CMD comes down it, so no report socket is bound — this board no
-    // longer transmits on the 2.4 GHz sensing band.
-    let mut sock = UdpSocket::bind(MEASURE_PORT).expect("bind measurement port");
-    sock.set_recv_timeout(20).expect("set recv timeout");
+    // longer transmits on the 2.4 GHz sensing band. In sim mode there is no
+    // WiFi stack at all (lwIP is only initialized by the Wi-Fi driver), so
+    // binding the socket here would panic — it is gated off entirely.
+    let mut sock: Option<UdpSocket> = None;
     let mut rbuf = [0u8; 256];
+    if config.sim_mode == 0 {
+        let mut s = UdpSocket::bind(MEASURE_PORT).expect("bind measurement port");
+        s.set_recv_timeout(20).expect("set recv timeout");
+        sock = Some(s);
+    }
 
     let mut cal = CalCollect::None;
 
@@ -278,6 +350,15 @@ pub fn run(params: RunParams) -> ! {
 
     let mut frame_idx: u32 = 0;
     loop {
+        // -- 0. Sim feed (sim mode only) ------------------------------------
+        // Push every scenario frame whose due instant has passed. t_us is
+        // stamped here, at push time, so emitted CSI_PHASE carries the real
+        // producer cadence rather than consume-time (which a blocking recv
+        // would smear into bursts).
+        if let Some(sim) = &mut sim {
+            sim.pump(ring);
+        }
+
         // -- 1. Drain the CSI ring ------------------------------------------
         while let Some(frame) = ring.pop() {
             if frame.info.mac != ap_bssid {
@@ -305,6 +386,28 @@ pub fn run(params: RunParams) -> ! {
 
             let (_bp, pc1) = pipe.process(&ch, frame_idx);
             window.push(&frame, &ch, &pipe, pc1);
+
+            // Coherent per-packet phase increment (radians), CFO-removed, for
+            // the report's phase_motion (RMS) / doppler_hz (mean) outputs.
+            if let Some(hp) = phase_track.process(&ch) {
+                window.phase_push(hp);
+            }
+
+            // Sim telemetry: emit the RAW per-subcarrier phase of this packet
+            // at full rate. `seq` = scenario frame index (the feed's rx_seq),
+            // `t_us` = producer-stamped push time — both let the analyzer
+            // correlate emitted phase with ground truth across any drops.
+            if config.sim_mode == 1 {
+                let phase_mrad = to_mrad(&ch.raw_phase);
+                if let Err(e) = wired.send_csi_phase(
+                    node_id,
+                    frame.info.rx_seq as u32,
+                    frame.info.timestamp_us as u64,
+                    &phase_mrad,
+                ) {
+                    log::warn!("csi_phase send failed: {e}");
+                }
+            }
 
             // Emit a FeatureReport when the window is full.
             if window.n >= report_every {
@@ -341,12 +444,15 @@ pub fn run(params: RunParams) -> ! {
         }
 
         // -- 3. Incoming measurement frames (WiFi) ----------------------------
-        // Only RATE-1 DataFrames arrive on the measurement port now.
-        if let Some((kind, _src, seq, _payload, _peer_ip, _peer_port)) =
-            recv_radar_frame(&mut sock, &mut rbuf)
-        {
-            if kind == frame_type::DATA_FRAME {
-                last_tx_seq = seq;
+        // Only RATE-1 DataFrames arrive on the measurement port now. Skipped
+        // entirely in sim mode (no stack to receive from).
+        if let Some(sock) = &mut sock {
+            if let Some((kind, _src, seq, _payload, _peer_ip, _peer_port)) =
+                recv_radar_frame(sock, &mut rbuf)
+            {
+                if kind == frame_type::DATA_FRAME {
+                    last_tx_seq = seq;
+                }
             }
         }
 
@@ -569,6 +675,12 @@ struct ReportWindow {
     last_phase: [f32; N_SUBCARRIERS],
     last_amps: [f32; N_SUBCARRIERS],
     baseline_dev_acc: f32,
+    /// CFO-removed phase increments (radians): squared sum → RMS phase_motion.
+    dphi_hp_sumsq: f32,
+    /// CFO-removed phase increments: sum → mean → Doppler.
+    dphi_hp_sum: f32,
+    /// Phase pairs accumulated (the first frame of a window has no pair).
+    n_phase: u32,
 }
 
 impl Default for ReportWindow {
@@ -588,6 +700,9 @@ impl Default for ReportWindow {
             last_phase: [0.0; N_SUBCARRIERS],
             last_amps: [0.0; N_SUBCARRIERS],
             baseline_dev_acc: 0.0,
+            dphi_hp_sumsq: 0.0,
+            dphi_hp_sum: 0.0,
+            n_phase: 0,
         }
     }
 }
@@ -622,6 +737,13 @@ impl ReportWindow {
         }
     }
 
+    /// Accumulate one CFO-removed per-packet phase increment (radians).
+    fn phase_push(&mut self, hp_dphi: f32) {
+        self.n_phase += 1;
+        self.dphi_hp_sum += hp_dphi;
+        self.dphi_hp_sumsq += hp_dphi * hp_dphi;
+    }
+
     /// Turn the accumulated window into a [`FeatureReport`].
     fn report(
         &self,
@@ -649,6 +771,14 @@ impl ReportWindow {
         let amp_var = (self.amp_sq_sum / n - amp_mean * amp_mean).max(0.0);
         let amp_std = amp_var.sqrt();
 
+        // Coherent phase outputs (CFO removed by the PhaseTracker high-pass):
+        //   phase_motion = RMS per-packet phase increment (radians)
+        //   doppler_hz   = mean phase rate → Hz: f_d = Δφ̄·fs/(2π), positive
+        //                  when approaching
+        let nph = self.n_phase.max(1) as f32;
+        let phase_motion = (self.dphi_hp_sumsq / nph).sqrt();
+        let doppler_hz = (self.dphi_hp_sum / nph) * fs / (2.0 * core::f32::consts::PI);
+
         let mut report = FeatureReport {
             seq: last_tx_seq,
             n_frames: self.n,
@@ -670,6 +800,8 @@ impl ReportWindow {
             motion_energy,
             spectral_entropy: entropy,
             dominant_freq_hz: dominant_hz,
+            phase_motion,
+            doppler_hz,
             phase_dispersion: circular_variance(&self.last_phase),
             baseline_dev: if self.n > 0 && pipe.stored_baseline.is_some() {
                 self.baseline_dev_acc / self.n as f32

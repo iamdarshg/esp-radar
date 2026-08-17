@@ -22,7 +22,11 @@ use crc::crc16;
 
 /// Magic bytes "RDR1" — first four bytes of every radar frame.
 pub const MAGIC: u32 = 0x5244_5231;
-pub const VERSION: u8 = 1;
+/// Wire version. Bumped to 2 for the phase-coherent radar path: `FeatureReport`
+/// gained `phase_motion`/`doppler_hz` and the new `CSI_PHASE` frame appeared.
+/// All boards are flashed from the same tree, so the version check is
+/// consistency-only.
+pub const VERSION: u8 = 2;
 
 /// Node roles.
 pub mod node {
@@ -41,6 +45,9 @@ pub mod frame_type {
     pub const STATUS: u8 = 0x14;
     /// Low-rate per-subcarrier CSI snapshot (waterfall + spectrogram source).
     pub const CSI_SNAPSHOT: u8 = 0x15;
+    /// Full-rate RAW per-subcarrier phase telemetry (sim mode; the radar
+    /// observable for the RF-sim error analysis).
+    pub const CSI_PHASE: u8 = 0x16;
     pub const CP_MESSAGE: u8 = 0x20;
 }
 
@@ -116,6 +123,17 @@ pub struct FeatureReport {
     /// empty-room baseline with low temporal motion energy ⇒ STATIC PRESENCE.
     pub baseline_dev: f32,
     pub pca_scores: [f32; MAX_PCA],
+    /// RMS per-packet coherent phase increment (radians) over the window —
+    /// the phase-coherent motion observable. A target displacement Δr shifts
+    /// the received phase by Δφ = 4π·Δr/λ (round-trip; λ ≈ 12.5 cm at 2.4 GHz
+    /// → 1 mm ≈ 0.10 rad). Amplitude-independent, unlike `motion_energy`.
+    pub phase_motion: f32,
+    /// Mean Doppler shift (Hz) over the window, from the per-frame phase rate
+    /// after a scalar high-pass strips the per-board CFO (a DC bias in the
+    /// phase rate — without it, a 100 Hz residual CFO aliases to the whole
+    /// unambiguous velocity range). f_d = Δφ̄·fs/(2π); sign positive when the
+    /// target approaches.
+    pub doppler_hz: f32,
 }
 
 pub mod report_flags {
@@ -180,6 +198,37 @@ impl Default for CsiSnapshot {
             iq: [0; N_SUBCARRIERS * 2],
             amp_norm: [0; N_SUBCARRIERS],
             spec: [0; N_SPEC_BINS],
+        }
+    }
+}
+
+/// RX → TX RAW per-subcarrier phase telemetry (frame type `CSI_PHASE`).
+///
+/// Unlike [`CsiSnapshot`], whose IQ is reconstructed from the *sanitized*
+/// phase, this frame carries the raw measured phase — the linear-across-
+/// subcarrier slope, which carries the dominant-path range signal
+/// (`φ_k = -2π·f_k·τ`), is preserved. A downstream analyzer can therefore
+/// recover displacement and Doppler of the dominant path from it.
+///
+/// Emitted only in sim mode (QEMU RF-sim feed) at the full measurement rate.
+/// The 24-byte header carries the pairing `seq` and the producer-stamped
+/// `t_us` (µs) — the payload is deliberately just the phase array so the frame
+/// stays 136 B total (112 B payload + 24 B header ≈ 59 % of the 46080 B/s
+/// byte budget at 200 Hz). Phase is fixed-point radians × 1000 in `i16`:
+/// resolution 0.001 rad (≈ 0.04 mm displacement at 2.4 GHz), range ±32.7 rad,
+/// well inside the [-π, π] span of one `atan2` sample.
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CsiPhase {
+    /// RAW phase per active subcarrier, radians × 1000.
+    pub phase: [i16; N_SUBCARRIERS],
+}
+
+impl Default for CsiPhase {
+    fn default() -> Self {
+        // Manual impl: `[i16; N_SUBCARRIERS]` (> 32 elements) has no derive.
+        Self {
+            phase: [0; N_SUBCARRIERS],
         }
     }
 }
@@ -329,6 +378,14 @@ pub fn parse_csi_snapshot(payload: &[u8]) -> Option<CsiSnapshot> {
     Some(unsafe { (payload.as_ptr() as *const CsiSnapshot).read_unaligned() })
 }
 
+/// Deserialize a CSI phase payload (must be at least the fixed struct size).
+pub fn parse_csi_phase(payload: &[u8]) -> Option<CsiPhase> {
+    if payload.len() < core::mem::size_of::<CsiPhase>() {
+        return None;
+    }
+    Some(unsafe { (payload.as_ptr() as *const CsiPhase).read_unaligned() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +466,57 @@ mod tests {
     #[test]
     fn csi_snapshot_rejects_short_payload() {
         assert!(parse_csi_snapshot(&[0u8; 8]).is_none());
+    }
+
+    #[test]
+    fn csi_phase_size_and_roundtrip() {
+        assert!(core::mem::size_of::<CsiPhase>() <= MAX_PAYLOAD);
+        // 112 B payload + 24 B header = 136 B/frame (the size budget the sim
+        // link-budget relies on).
+        assert_eq!(core::mem::size_of::<CsiPhase>(), N_SUBCARRIERS * 2);
+        let mut phase = [0i16; N_SUBCARRIERS];
+        phase[0] = 3141; // ~π rad
+        phase[27] = -1571; // ~-π/2
+        phase[55] = 5;
+        let cph = CsiPhase { phase };
+
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                (&cph as *const CsiPhase) as *const u8,
+                core::mem::size_of::<CsiPhase>(),
+            )
+        };
+        let hdr = Header::new(
+            frame_type::CSI_PHASE,
+            node::RX2,
+            node::TX,
+            1234,
+            99,
+            payload.len() as u16,
+        );
+        let mut buf = [0u8; 1024];
+        let n = build(&mut buf, &hdr, payload);
+        assert!(n > 0);
+        assert_eq!(n, HEADER_SIZE + core::mem::size_of::<CsiPhase>());
+
+        let (parsed, pl) = parse(&buf[..n]).expect("phase frame parses");
+        let kind = parsed.kind;
+        let seq = parsed.seq;
+        let t_us = parsed.t_us;
+        assert_eq!(kind, frame_type::CSI_PHASE);
+        assert_eq!(seq, 1234);
+        assert_eq!(t_us, 99);
+        let back = parse_csi_phase(pl).unwrap();
+        // Packed fields must be copied by value before use (E0793).
+        let phase = back.phase;
+        assert_eq!(phase[0], 3141);
+        assert_eq!(phase[27], -1571);
+        assert_eq!(phase[55], 5);
+    }
+
+    #[test]
+    fn csi_phase_rejects_short_payload() {
+        assert!(parse_csi_phase(&[0u8; 8]).is_none());
     }
 
     #[test]

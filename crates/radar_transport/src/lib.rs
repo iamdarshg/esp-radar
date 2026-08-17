@@ -29,7 +29,7 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use core::fmt;
 
-pub use radar_protocol::{node, CalResp, CsiSnapshot, FeatureReport, Header};
+pub use radar_protocol::{node, CalResp, CsiPhase, CsiSnapshot, FeatureReport, Header};
 
 /// UDP port for TX → RX measurement traffic (both RX listen here).
 pub const MEASURE_PORT: u16 = 4444;
@@ -525,6 +525,37 @@ pub fn build_csi_snapshot(dst: &mut [u8], src: u8, snap: &CsiSnapshot, t_us: u64
     radar_protocol::build(dst, &hdr, pl)
 }
 
+/// Build a `CsiPhase` (RX → TX, full measurement rate in sim mode) into `dst`.
+/// Returns bytes written, or 0 if `dst` is too small. `seq` pairs the frame
+/// with the report stream (frame index in sim mode); `t_us` must be the
+/// producer-stamped capture time (the time the CSI sample was received), never
+/// a consume-time stamp — the radar loop blocks up to 20 ms per iteration, so
+/// a consume-time stamp would burst-correlate and corrupt the velocity fit.
+pub fn build_csi_phase(
+    dst: &mut [u8],
+    src: u8,
+    seq: u32,
+    t_us: u64,
+    phase: &[i16; radar_protocol::N_SUBCARRIERS],
+) -> usize {
+    let cph = CsiPhase { phase: *phase };
+    let pl = unsafe {
+        core::slice::from_raw_parts(
+            (&cph as *const CsiPhase) as *const u8,
+            core::mem::size_of::<CsiPhase>(),
+        )
+    };
+    let hdr = Header::new(
+        radar_protocol::frame_type::CSI_PHASE,
+        src,
+        node::TX,
+        seq,
+        t_us,
+        pl.len() as u16,
+    );
+    radar_protocol::build(dst, &hdr, pl)
+}
+
 #[cfg(feature = "device")]
 pub mod udp;
 
@@ -696,5 +727,24 @@ mod tests {
         let b_energy = back.motion_energy;
         assert_eq!(b_seq, 99);
         assert!((b_energy - 1.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn csi_phase_roundtrip() {
+        let mut buf = [0u8; 512];
+        let mut phase = [0i16; radar_protocol::N_SUBCARRIERS];
+        phase[0] = 3141;
+        phase[55] = -42;
+        let n = build_csi_phase(&mut buf, node::RX2, 200, 555, &phase);
+        assert!(n > 0);
+        assert_eq!(n, 24 + 112);
+        let (kind, src, seq, payload) = parse_frame(&buf[..n]).expect("parse");
+        assert_eq!(kind, radar_protocol::frame_type::CSI_PHASE);
+        assert_eq!(src, node::RX2);
+        assert_eq!(seq, 200);
+        let back = radar_protocol::parse_csi_phase(payload).unwrap();
+        let phase = back.phase;
+        assert_eq!(phase[0], 3141);
+        assert_eq!(phase[55], -42);
     }
 }

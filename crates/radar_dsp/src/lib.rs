@@ -82,6 +82,12 @@ pub struct Channel {
     pub amps: [f32; N_SUBCARRIERS],
     /// Sanitized phase per active subcarrier (linear slope removed).
     pub phase: [f32; N_SUBCARRIERS],
+    /// RAW phase per active subcarrier (as measured, before `sanitize_phase`).
+    ///
+    /// `sanitize_phase` removes the linear-across-subcarrier slope, but that
+    /// slope IS the dominant-path range signal (`φ_k = -2π·f_k·τ`), so the
+    /// radar's displacement/Doppler observable lives here, not in `phase`.
+    pub raw_phase: [f32; N_SUBCARRIERS],
     pub rssi: i16,
     pub noise_floor: i16,
     pub valid: bool,
@@ -92,6 +98,7 @@ impl Default for Channel {
         Self {
             amps: [0.0; N_SUBCARRIERS],
             phase: [0.0; N_SUBCARRIERS],
+            raw_phase: [0.0; N_SUBCARRIERS],
             rssi: 0,
             noise_floor: 0,
             valid: false,

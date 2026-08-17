@@ -1,0 +1,12 @@
+# QEMU flash layout for the ESP-RADAR head (4 MB merged images).
+#
+# nvs / phy_init / factory mirror the production RX table; `simdata` is a
+# raw-data partition holding the rf-sim scenario blob flashed by the harness
+# in sim mode (firmware/radar_rx/src/sim.rs streams it into the CSI ring).
+#
+# Offsets mirror esp-idf's default factory layout; simdata sits at 0x300000
+# (3 MB, 512 KB) so it never collides with the 2 MB factory app at 0x10000.
+nvs,data,nvs,0x9000,0x6000,
+phy_init,data,phy,0xf000,0x1000,
+factory,app,factory,0x10000,0x200000,
+simdata,data,spiffs,0x300000,0x80000,

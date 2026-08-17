@@ -31,6 +31,7 @@ use radar_storage::RadarConfig;
 
 mod link;
 mod radar;
+mod sim;
 mod wifi;
 mod wired;
 
@@ -61,19 +62,51 @@ fn main() -> anyhow::Result<()> {
         config.report_every
     );
 
-    // -- radio --------------------------------------------------------------
+    // -- radio / sim source -------------------------------------------------
+    // Sim mode (`sim_mode == 1`) replaces the real 2.4 GHz link with a
+    // pre-recorded scenario streamed from the `simdata` flash partition: no
+    // WiFi association, no CSI callback. The measurement plane is a fiction in
+    // QEMU, so the AP BSSID the ring filter matches is taken from the blob.
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
-    let (wifi, ap_bssid) = wifi::connect_sta(peripherals.modem, sys_loop, config.channel)?;
-    // `EspWifi`'s Drop disconnects the STA; leak it so the association stays up.
-    let _wifi = Box::leak(Box::new(wifi));
+
+    let sim = if config.sim_mode == 1 {
+        match sim::SimSource::open() {
+            Some(s) => {
+                log::info!(
+                    "sim mode: simdata feed ready ({} frames @ {} Hz)",
+                    s.n_frames(),
+                    s.rate_hz()
+                );
+                Some(s)
+            }
+            None => {
+                log::error!("sim mode: simdata partition missing/invalid — no CSI will arrive");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let ap_bssid = if let Some(s) = &sim {
+        s.mac
+    } else {
+        let (wifi, bssid) = wifi::connect_sta(peripherals.modem, sys_loop, config.channel)?;
+        // `EspWifi`'s Drop disconnects the STA; leak it so the association stays up.
+        let _wifi = Box::leak(Box::new(wifi));
+        bssid
+    };
 
     // -- CSI ----------------------------------------------------------------
     // The ring must be `'static`: the WiFi CSI callback (running in the WiFi
     // task context) writes into it, and the radar task reads from it. 128 slots
-    // × 256 B ≈ 32 KB of heap — plenty at the 200 Hz rate.
+    // × 256 B ≈ 32 KB of heap — plenty at the 200 Hz rate. In sim mode there is
+    // no callback; `sim::SimSource::pump` is the single producer instead.
     let ring: &'static CsiRing = Box::leak(Box::new(CsiRing::new(128)));
-    start_csi(ring, &CsiConfig::default()).map_err(|e| anyhow::anyhow!("csi start: {e}"))?;
+    if config.sim_mode == 0 {
+        start_csi(ring, &CsiConfig::default()).map_err(|e| anyhow::anyhow!("csi start: {e}"))?;
+    }
 
     // -- wired data plane -----------------------------------------------------
     // Reports/CAL/snapshots go over UART, not WiFi, so this board stops
@@ -114,6 +147,7 @@ fn main() -> anyhow::Result<()> {
                 ring,
                 nvs,
                 ap_bssid,
+                sim,
             });
         })?;
 

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "static-cfo-only",
+  "rate_hz": 200,
+  "n_frames": 800,
+  "fc_hz": 2437000000.0,
+  "sub_spacing_hz": 312500.0,
+  "amp": 100.0,
+  "snr_db": 30.0,
+  "cfo_hz": 50.0,
+  "rssi_dbm": -52,
+  "noise_floor_dbm": -96,
+  "channel": 6,
+  "bssid": [36, 15, 40, 1, 2, 3],
+  "trajectory": { "type": "static" },
+  "paths": [
+    { "amp": 1.0, "delay_m": 2.0, "v_m_s": 0.0 }
+  ],
+  "target_path": 0,
+  "seed": 19690721
+}

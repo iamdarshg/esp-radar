@@ -10,6 +10,9 @@
 #   bash scripts/qemu-rebuild-images.sh
 #
 # Env overrides (all optional, same names as the harness):
+#   IDF_PY       python that has esptool + gen_esp32part
+#   GEN_PART     gen_esp32part.py path (regenerates qemu_partition-table.bin
+#                from scripts/qemu_partitions.csv when missing or stale)
 #   ESPTOOL      esptool(.exe) path
 #   BOOTLOADER   bootloader.bin path
 #   SCRATCH      scratch dir holding the images + logs (default .scratch/qemu)
@@ -19,6 +22,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+IDF_PY="${IDF_PY:-C:/Espressif/python_env/Scripts/python.exe}"
+GEN_PART="${GEN_PART:-C:/Espressif/frameworks/esp-idf-v5.4/components/partition_table/gen_esp32part.py}"
 ESPTOOL="${ESPTOOL:-C:/Espressif/python_env/Scripts/esptool.exe}"
 BOOTLOADER="${BOOTLOADER:-C:/rt/xtensa-esp32-espidf/release/build/esp-idf-sys-8625b8f33a4b386c/out/build/bootloader/bootloader.bin}"
 SCRATCH="${SCRATCH:-$REPO_ROOT/.scratch/qemu}"
@@ -33,9 +38,18 @@ fi
 # Preflight
 [ -f "$ESPTOOL" ]     || { echo "ERROR: esptool not found: $ESPTOOL" >&2; exit 1; }
 [ -f "$BOOTLOADER" ]  || { echo "ERROR: bootloader not found: $BOOTLOADER" >&2; exit 1; }
-[ -f "$SCRATCH/qemu_partition-table.bin" ] || { echo "ERROR: qemu partition table missing: $SCRATCH/qemu_partition-table.bin" >&2; exit 1; }
 [ -f "$TX_ELF" ]      || { echo "ERROR: TX ELF missing: $TX_ELF (build firmware first)" >&2; exit 1; }
 [ -f "$RX_ELF" ]      || { echo "ERROR: RX ELF missing: $RX_ELF (build firmware first)" >&2; exit 1; }
+
+# Regenerate the QEMU partition table from the committed CSV when missing or
+# stale (the simdata partition entry is added in scripts/qemu_partitions.csv).
+PART_CSV="$REPO_ROOT/scripts/qemu_partitions.csv"
+if [ ! -f "$SCRATCH/qemu_partition-table.bin" ] || [ "$PART_CSV" -nt "$SCRATCH/qemu_partition-table.bin" ]; then
+  [ -f "$GEN_PART" ] || { echo "ERROR: gen_esp32part not found: $GEN_PART" >&2; exit 1; }
+  echo "==> Partition table (gen_esp32part from $PART_CSV)"
+  "$IDF_PY" "$GEN_PART" "$PART_CSV" "$SCRATCH/qemu_partition-table.bin"
+fi
+[ -f "$SCRATCH/qemu_partition-table.bin" ] || { echo "ERROR: qemu partition table missing: $SCRATCH/qemu_partition-table.bin" >&2; exit 1; }
 
 echo "==> App images (esptool elf2image)"
 "$ESPTOOL" --chip esp32 elf2image --flash_mode dio --flash_freq 40m --flash_size 4MB \

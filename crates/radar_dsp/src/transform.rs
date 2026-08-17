@@ -83,9 +83,35 @@ pub fn decode_channel(
         ch.amps[i] = c.mag();
         phase[i] = c.phase();
     }
+    ch.raw_phase = phase;
     sanitize_phase(&mut phase);
     ch.phase = phase;
     ch
+}
+
+/// Coherent per-packet phase increment across subcarriers, radians.
+///
+/// For each subcarrier the conjugate product `cur · conj(prev)` rotates by the
+/// displacement phase `Δφ_k = -2π·f_k·Δτ` (identical across subcarriers up to
+/// the ±0.36 % carrier spread). Summing the products magnitude-weights the
+/// combine (~√56 SNR gain) and `atan2` of the sum unwraps 2π automatically —
+/// robust against the CFO ramp that would otherwise alias a raw phase
+/// difference.
+///
+/// `Δφ̄` maps to motion as:
+///   Doppler  f_d = Δφ̄·fs/(2π)          (positive when approaching)
+///   velocity v   = -Δφ̄·fs·c/(4π·f_c)
+pub fn phase_increment(prev: &Channel, cur: &Channel) -> f32 {
+    let mut re = 0.0f32;
+    let mut im = 0.0f32;
+    for k in 0..N_SUBCARRIERS {
+        let d = cur.raw_phase[k] - prev.raw_phase[k];
+        let (s, c) = d.sin_cos();
+        let w = cur.amps[k] * prev.amps[k];
+        re += w * c;
+        im += w * s;
+    }
+    im.atan2(re)
 }
 
 /// Remove the linear phase slope across subcarriers (CFO/SFO component),
@@ -198,6 +224,70 @@ mod tests {
         let mut phase: Vec<f32> = (0..56).map(|i| 0.05 * i as f32).collect();
         sanitize_phase(&mut phase);
         assert!(phase.iter().all(|p| p.abs() < 1e-3));
+    }
+
+    #[test]
+    fn raw_phase_kept_and_sanitized_slope_removed() {
+        // A constant-amplitude channel with a small linear phase ramp across
+        // subcarriers (the dominant-path delay signature). raw_phase must
+        // preserve the ramp; the sanitized phase (slope removed) must be ~0.
+        let mut buf = [0i8; 128];
+        for (k, &bin) in valid_bins().iter().enumerate() {
+            let phi = 0.002 * k as f32; // small enough that atan2 never wraps
+            let (s, c) = phi.sin_cos();
+            buf[bin * 2] = (80.0 * c).round() as i8;
+            buf[bin * 2 + 1] = (80.0 * s).round() as i8;
+        }
+        let ch = decode_channel(&buf, false, -50, -100);
+        assert!(ch.valid);
+        for (k, &rp) in ch.raw_phase.iter().enumerate() {
+            let want = 0.002 * k as f32;
+            assert!(
+                (rp - want).abs() < 0.02,
+                "k={k} raw {rp} vs {want} (i8 I/Q quantization ~0.5/80 rad)"
+            );
+        }
+        assert!(
+            ch.phase.iter().all(|p| p.abs() < 0.02),
+            "sanitized phase {:?}",
+            &ch.phase[..4]
+        );
+    }
+
+    #[test]
+    fn phase_increment_recovers_displacement() {
+        // Consecutive channels whose raw phase advances by a common Δφ on
+        // every subcarrier (a moving target: Δφ = -2π·f_k·Δτ ≈ constant across
+        // the ±0.36% carrier spread). phase_increment must return Δφ.
+        let mut prev = Channel::default();
+        let mut cur = Channel::default();
+        let dphi = 0.1f32;
+        for k in 0..N_SUBCARRIERS {
+            prev.amps[k] = 100.0;
+            cur.amps[k] = 100.0;
+            prev.raw_phase[k] = 0.7 + 0.001 * k as f32;
+            cur.raw_phase[k] = 0.7 + 0.001 * k as f32 + dphi;
+        }
+        let got = phase_increment(&prev, &cur);
+        assert!((got - dphi).abs() < 1e-4, "got {got}, want {dphi}");
+    }
+
+    #[test]
+    fn phase_increment_handles_2pi_wrap() {
+        // The same +0.1 rad increment, but the raw phases straddle ±π so a
+        // naive per-subcarrier difference would alias to -6.2 rad. The coherent
+        // conjugate-product sum must still recover +0.1.
+        let mut prev = Channel::default();
+        let mut cur = Channel::default();
+        for k in 0..N_SUBCARRIERS {
+            prev.amps[k] = 100.0;
+            cur.amps[k] = 100.0;
+            prev.raw_phase[k] = core::f32::consts::PI - 0.04; // ~3.10
+            // 3.10 + 0.1 wraps past π → -3.083
+            cur.raw_phase[k] = prev.raw_phase[k] + 0.1 - 2.0 * core::f32::consts::PI;
+        }
+        let got = phase_increment(&prev, &cur);
+        assert!((got - 0.1).abs() < 1e-4, "got {got}, want 0.1");
     }
 
     #[test]

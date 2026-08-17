@@ -104,14 +104,23 @@ impl CsiRing {
     }
 
     /// Producer side — call ONLY from the CSI callback.
-    pub fn push(&self, info: CsiInfo, buf: &[i8]) {
+    ///
+    /// Returns `true` if the frame was stored, `false` if the ring was full
+    /// and the frame was dropped. The WiFi path drops on overflow (correct:
+    /// the consumer may over-run at high CSI rates, and a fresh CSI frame is
+    /// always more current than a stale one). A producer that needs
+    /// *backpressure* — every frame delivered in order, never silently
+    /// dropped — must check the return and retry the same frame later
+    /// (`firmware/radar_rx/src/sim.rs` does this so a slow QEMU consumer does
+    /// not lose scenario frames).
+    pub fn push(&self, info: CsiInfo, buf: &[i8]) -> bool {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
         let next = (head + 1) % self.cap;
         if next == tail {
             // Full: drop and count. The radar may over-run at high CSI rates.
             self.overflow.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
         let slot = unsafe { &mut (*self.slots.get())[head] };
         slot.info = info;
@@ -119,6 +128,7 @@ impl CsiRing {
         slot.buf[..n].copy_from_slice(&buf[..n]);
         slot.len = n;
         self.head.store(next, Ordering::Release);
+        true
     }
 
     /// Consumer side — call from the radar task. `None` when empty.

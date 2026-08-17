@@ -58,13 +58,28 @@ TX_WAIT="${TX_WAIT:-45}"
 RX1_WAIT="${RX1_WAIT:-70}"
 RX2_WAIT="${RX2_WAIT:-45}"
 
+# ---- sim-mode run (SIM=1) --------------------------------------------------
+# Both RX boards boot radar_rx with sim_mode=1 in NVS and an rf-sim scenario
+# blob at the `simdata` partition. No WiFi is brought up (no AP, no phy
+# assert) — the SimSource streams the scenario into the CSI ring and the
+# firmware emits CSI_PHASE over UART1. The harness captures UART0 (console)
+# and UART1 (phase telemetry) to separate files, asserts the sim milestones,
+# and counts CSI_PHASE frames from the UART1 capture.
+SIM="${SIM:-0}"
+SIMDATA_BIN="${SIMDATA_BIN:-}"     # path to an rf-sim-generated blob (gen)
+SIM_SCENARIO="${SIM_SCENARIO:-}"   # path to the scenario JSON (for analyze)
+SIM_WAIT="${SIM_WAIT:-40}"         # per-board wait for the sim feed to drain
+
 # Exact 21-byte RadarConfig blob, little-endian per crates/radar_storage
 # to_bytes(): version u32=1 | channel u8=6 | tx_rate_hz u16=200 |
 # report_every u16=20 | pair_tolerance u16=10 | tx_power_db u8=0 |
-# node_role u8=0x03 (RX2) | ant_txrx1 u16=0 | ant_txrx2 u16=0 |
-# csi_shift u8=0 | reserved[0;3].
-#   = 01 00 00 00 06 c8 00 14 00 0a 00 00 03 00 00 00 00 00 00 00 00
+# node_role u8 | ant_txrx1 u16=0 | ant_txrx2 u16=0 | csi_shift u8=0 |
+# sim_mode u8=1 | reserved u8[2]=0.
+#   RX2 (node_role 0x03): 01 00 00 00 06 c8 00 14 00 0a 00 00 03 00 00 00 00 00 01 00 00
+#   RX1 (node_role 0x02): 01 00 00 00 06 c8 00 14 00 0a 00 00 02 00 00 00 00 00 01 00 00
 RX2_BLOB_HEX="0100000006c80014000a0000030000000000000000"
+SIM_RX1_BLOB_HEX="0100000006c80014000a0000020000000000010000"
+SIM_RX2_BLOB_HEX="0100000006c80014000a0000030000000000010000"
 
 TX_IMG_SRC="$SCRATCH/qemu_tx.bin"
 RX1_IMG_SRC="$SCRATCH/qemu_rx.bin"
@@ -102,6 +117,170 @@ prepare_image() {
   cp -f "$src" "$dst" || die "cp failed for $dst"
   blank_region "$dst" 0x9000 0x7000   # nvs 0x9000/0x6000 + phy_init 0xf000/0x1000
 }
+
+# ---- assertion helpers -------------------------------------------------------
+PASS=0
+FAIL=0
+PASSED=""
+FAILED=""
+
+check() {  # board milestone pattern
+  local board="$1" milestone="$2" pattern="$3"
+  if grep -q -- "$pattern" "$LOG_FILE"; then
+    local line
+    line="$(grep -m1 -- "$pattern" "$LOG_FILE")"
+    PASS=$((PASS + 1))
+    PASSED="$PASSED|$board|$milestone"
+    printf 'PASS  %-4s  %-34s %s\n' "$board" "$milestone" "$line"
+  else
+    FAIL=$((FAIL + 1))
+    FAILED="$FAILED|$board|$milestone"
+    printf 'FAIL  %-4s  %-34s (pattern not found: %s)\n' "$board" "$milestone" "$pattern"
+  fi
+}
+
+# A "must NOT contain" assertion (used to prove the NVS path was taken, not the
+# hardware-inference path, on the RX2 machine).
+check_absent() {
+  local board="$1" milestone="$2" pattern="$3"
+  if grep -q -- "$pattern" "$LOG_FILE"; then
+    local line
+    line="$(grep -m1 -- "$pattern" "$LOG_FILE")"
+    FAIL=$((FAIL + 1))
+    FAILED="$FAILED|$board|$milestone"
+    printf 'FAIL  %-4s  %-34s (must be ABSENT but found: %s)\n' "$board" "$milestone" "$line"
+  else
+    PASS=$((PASS + 1))
+    PASSED="$PASSED|$board|$milestone"
+    printf 'PASS  %-4s  %-34s (correctly absent)\n' "$board" "$milestone"
+  fi
+}
+
+# Launch a QEMU machine in the background. `run_board name img uart0_log
+# [uart1_log] wait` — the first `-serial` is the UART0 console; a second
+# `-serial` (when uart1_log is given) is the UART1 wired data plane that the
+# sim run captures CSI_PHASE from.
+run_board() {
+  local name="$1" img="$2" log="$3" wait_s="$4"
+  local uart1_log="$5"
+  local stderr="$SCRATCH/${name}_stderr.log"
+  if [ -n "$uart1_log" ]; then
+    timeout "$wait_s" "$QEMU_BIN" -display none -machine esp32 \
+      -drive file="$img",if=mtd,format=raw \
+      -global driver=timer.esp32.timg,property=wdt_disable,value=true \
+      -serial file:"$log" -serial file:"$uart1_log" 2>"$stderr" &
+    echo "launched $name (pid $!, wait ${wait_s}s) -> $log + uart1:$uart1_log"
+  else
+    timeout "$wait_s" "$QEMU_BIN" -display none -machine esp32 \
+      -drive file="$img",if=mtd,format=raw \
+      -global driver=timer.esp32.timg,property=wdt_disable,value=true \
+      -serial file:"$log" 2>"$stderr" &
+    echo "launched $name (pid $!, wait ${wait_s}s) -> $log"
+  fi
+}
+
+# =============================================================================
+# SIM-MODE RUN (SIM=1): both RX boards stream an rf-sim scenario; no TX board,
+# no WiFi bring-up. Captures UART0 (console) + UART1 (CSI_PHASE telemetry).
+# =============================================================================
+if [ "$SIM" = "1" ]; then
+  [ -n "$SIMDATA_BIN" ] || die "SIM=1 requires SIMDATA_BIN=<path to rf-sim simdata blob>"
+  [ -f "$SIMDATA_BIN" ] || die "simdata blob missing: $SIMDATA_BIN"
+  [ -f "$QEMU_BIN" ]    || die "qemu not found at $QEMU_BIN"
+  [ -f "$BOOTLOADER" ]  || die "bootloader missing: $BOOTLOADER"
+  [ -f "$SCRATCH/qemu_partition-table.bin" ] || die "partition table missing: $SCRATCH/qemu_partition-table.bin (run qemu-rebuild-images.sh)"
+  [ -f "$SCRATCH/radar_rx.bin" ] || die "RX app image missing: $SCRATCH/radar_rx.bin (run qemu-rebuild-images.sh)"
+
+  # Provisioned NVS blobs (sim_mode=1 + node_role). Cached on disk; the merged
+  # images are rebuilt every run because the scenario blob changes.
+  make_sim_nvs() {  # csv bin blob_hex
+    if [ ! -f "$1" ]; then
+      printf 'key,type,encoding,value\nradar,namespace,,\nconfig,data,hex2bin,%s\n' "$3" > "$1"
+    fi
+    if [ ! -f "$2" ]; then
+      "$IDF_PY" "$NVS_GEN" generate "$1" "$2" 0x6000 || die "nvs_partition_gen failed ($2)"
+    fi
+  }
+  SIM_NVS_RX1_CSV="$SCRATCH/nvs_rx1_sim.csv"; SIM_NVS_RX1_BIN="$SCRATCH/nvs_rx1_sim.bin"
+  SIM_NVS_RX2_CSV="$SCRATCH/nvs_rx2_sim.csv"; SIM_NVS_RX2_BIN="$SCRATCH/nvs_rx2_sim.bin"
+  make_sim_nvs "$SIM_NVS_RX1_CSV" "$SIM_NVS_RX1_BIN" "$SIM_RX1_BLOB_HEX"
+  make_sim_nvs "$SIM_NVS_RX2_CSV" "$SIM_NVS_RX2_BIN" "$SIM_RX2_BLOB_HEX"
+
+  # Merge bootloader + partition table + NVS + app + simdata (per-run fresh).
+  SIM_RX1_IMG="$SCRATCH/qemu_rx_sim.bin"
+  SIM_RX2_IMG="$SCRATCH/qemu_rx_rx2_sim.bin"
+  merge_sim() {  # out nvs_bin
+    "$ESPTOOL" --chip esp32 merge_bin -o "$1" --flash_mode dio --flash_freq 40m --flash_size 4MB \
+      0x1000 "$BOOTLOADER" 0x8000 "$SCRATCH/qemu_partition-table.bin" \
+      0x9000 "$2" 0x10000 "$SCRATCH/radar_rx.bin" 0x300000 "$SIMDATA_BIN" \
+      || die "esptool merge_bin failed for $1"
+    truncate -s 4M "$1" || die "truncate $1 failed"
+  }
+  merge_sim "$SIM_RX1_IMG" "$SIM_NVS_RX1_BIN"
+  merge_sim "$SIM_RX2_IMG" "$SIM_NVS_RX2_BIN"
+
+  SIM_RX1_LOG="$SCRATCH/qemu_rx_sim_uart0.log"
+  SIM_RX1_PHASE="$SCRATCH/qemu_rx_sim_uart1.log"
+  SIM_RX2_LOG="$SCRATCH/qemu_rx_rx2_sim_uart0.log"
+  SIM_RX2_PHASE="$SCRATCH/qemu_rx_rx2_sim_uart1.log"
+  rm -f "$SIM_RX1_LOG" "$SIM_RX1_PHASE" "$SIM_RX2_LOG" "$SIM_RX2_PHASE" \
+        "$SCRATCH/qemu_rx_sim_stderr.log" "$SCRATCH/qemu_rx_rx2_sim_stderr.log"
+
+  run_board "qemu_rx_sim"    "$SIM_RX1_IMG" "$SIM_RX1_LOG" "$SIM_WAIT" "$SIM_RX1_PHASE"
+  run_board "qemu_rx_rx2_sim" "$SIM_RX2_IMG" "$SIM_RX2_LOG" "$SIM_WAIT" "$SIM_RX2_PHASE"
+
+  echo "waiting for both RX boards to stream the sim scenario (or timeout)..."
+  wait
+  echo "all boards done; grepping sim milestones"
+  echo
+
+  PASS=0; FAIL=0; PASSED=""; FAILED=""
+  # Python (native Windows) needs a Windows-style path to the counter script.
+  CSI_COUNT="$REPO_ROOT/scripts/csi_phase_count.py"
+  if command -v cygpath >/dev/null 2>&1; then
+    CSI_COUNT="$(cygpath -w "$CSI_COUNT")"
+  fi
+  check_count() {  # board milestone capture_file
+    local board="$1" milestone="$2" cap="$3"
+    if [ -f "$cap" ] && "$IDF_PY" "$CSI_COUNT" "$cap"; then
+      PASS=$((PASS + 1))
+      PASSED="$PASSED|$board|$milestone"
+      printf 'PASS  %-4s  %-34s CSI_PHASE frames captured on UART1\n' "$board" "$milestone"
+    else
+      FAIL=$((FAIL + 1))
+      FAILED="$FAILED|$board|$milestone"
+      printf 'FAIL  %-4s  %-34s (no valid CSI_PHASE frames in %s)\n' "$board" "$milestone" "$cap"
+    fi
+  }
+
+  echo "=========================== SIM BOARD MATRIX =========================="
+  printf '%-6s %-36s %s\n' "RESULT" "MILESTONE" "EVIDENCE"
+
+  LOG_FILE="$SIM_RX1_LOG"
+  check "RX1" "provisioned role from NVS" "node role from NVS: RADAR-RX1"
+  check "RX1" "simdata feed ready"         "sim mode: simdata feed ready"
+  check "RX1" "radar loop started"         "radar loop: fs="
+  check_count "RX1" "CSI_PHASE telemetry"  "$SIM_RX1_PHASE"
+
+  LOG_FILE="$SIM_RX2_LOG"
+  check "RX2" "provisioned role from NVS" "node role from NVS: RADAR-RX2"
+  check "RX2" "simdata feed ready"         "sim mode: simdata feed ready"
+  check "RX2" "radar loop started"         "radar loop: fs="
+  check_count "RX2" "CSI_PHASE telemetry"  "$SIM_RX2_PHASE"
+
+  echo "======================================================================"
+  echo
+  printf 'SUMMARY: %d passed, %d failed\n' "$PASS" "$FAIL"
+  if [ -n "$FAILED" ]; then
+    echo "failed milestones:"
+    echo "$FAILED" | tr '|' '\n' | awk 'NF' | while read -r b m; do echo "  - $b: $m"; done
+  fi
+  echo
+  echo "ground-truth analysis (offline):"
+  echo "  rf-sim analyze <scenario.json> $SIM_RX1_PHASE [--re-stamp] [--json]"
+  echo "  rf-sim analyze <scenario.json> $SIM_RX2_PHASE [--re-stamp] [--json]"
+  [ "$FAIL" -eq 0 ] && exit 0 || exit 1
+fi
 
 # ---- preflight --------------------------------------------------------------
 [ -f "$QEMU_BIN" ] || die "qemu not found at $QEMU_BIN"
@@ -141,63 +320,15 @@ rm -f "$TX_LOG" "$RX1_LOG" "$RX2_LOG" \
       "$SCRATCH/qemu_tx_stderr.log" "$SCRATCH/qemu_rx_stderr.log" \
       "$SCRATCH/qemu_rx_rx2_stderr.log"
 
-# ---- launch 3 QEMU machines concurrently -------------------------------------
-run_board() {  # name img log wait
-  local name="$1" img="$2" log="$3" wait_s="$4"
-  local stderr="$SCRATCH/${name}_stderr.log"
-  timeout "$wait_s" "$QEMU_BIN" -display none -machine esp32 \
-    -drive file="$img",if=mtd,format=raw \
-    -global driver=timer.esp32.timg,property=wdt_disable,value=true \
-    -serial file:"$log" 2>"$stderr" &
-  echo "launched $name (pid $!, wait ${wait_s}s) -> $log"
-}
-
-run_board "qemu_tx"    "$TX_IMG"  "$TX_LOG"  "$TX_WAIT"
-run_board "qemu_rx"    "$RX1_IMG" "$RX1_LOG" "$RX1_WAIT"
-run_board "qemu_rx_rx2" "$RX2_IMG" "$RX2_LOG" "$RX2_WAIT"
+# ---- launch QEMU machines concurrently ----------------------------------------
+run_board "qemu_tx"    "$TX_IMG"  "$TX_LOG"  "$TX_WAIT" ""
+run_board "qemu_rx"    "$RX1_IMG" "$RX1_LOG" "$RX1_WAIT" ""
+run_board "qemu_rx_rx2" "$RX2_IMG" "$RX2_LOG" "$RX2_WAIT" ""
 
 echo "waiting for all boards to hit the WiFi ceiling (or timeout)..."
 wait
 echo "all boards done; grepping milestone lines"
 echo
-
-# ---- assertion helpers -------------------------------------------------------
-PASS=0
-FAIL=0
-PASSED=""
-FAILED=""
-
-check() {  # board milestone pattern
-  local board="$1" milestone="$2" pattern="$3"
-  if grep -q -- "$pattern" "$LOG_FILE"; then
-    local line
-    line="$(grep -m1 -- "$pattern" "$LOG_FILE")"
-    PASS=$((PASS + 1))
-    PASSED="$PASSED|$board|$milestone"
-    printf 'PASS  %-4s  %-34s %s\n' "$board" "$milestone" "$line"
-  else
-    FAIL=$((FAIL + 1))
-    FAILED="$FAILED|$board|$milestone"
-    printf 'FAIL  %-4s  %-34s (pattern not found: %s)\n' "$board" "$milestone" "$pattern"
-  fi
-}
-
-# A "must NOT contain" assertion (used to prove the NVS path was taken, not the
-# hardware-inference path, on the RX2 machine).
-check_absent() {
-  local board="$1" milestone="$2" pattern="$3"
-  if grep -q -- "$pattern" "$LOG_FILE"; then
-    local line
-    line="$(grep -m1 -- "$pattern" "$LOG_FILE")"
-    FAIL=$((FAIL + 1))
-    FAILED="$FAILED|$board|$milestone"
-    printf 'FAIL  %-4s  %-34s (must be ABSENT but found: %s)\n' "$board" "$milestone" "$line"
-  else
-    PASS=$((PASS + 1))
-    PASSED="$PASSED|$board|$milestone"
-    printf 'PASS  %-4s  %-34s (correctly absent)\n' "$board" "$milestone"
-  fi
-}
 
 echo "============================= BOARD MATRIX ============================="
 printf '%-6s %-36s %s\n' "RESULT" "MILESTONE" "EVIDENCE"
