@@ -1,10 +1,10 @@
 //! Calibration state machine (spec §17).
 //!
-//! Runs inside the fusion/controller task, which owns the REPORT_PORT socket
-//! where CalResps land. CalCmds are broadcast from an ephemeral socket to the
-//! measurement port (both RX listen there). While a stage is active, the
-//! measurement traffic stamps its frames with the CAL flag so the receivers
-//! route CSI to their calibration collectors instead of the live pipeline.
+//! Runs inside the fusion/controller task, which owns the two wired UART
+//! links where CalResps land. CalCmds are written down **both** links (each RX
+//! reads its own). While a stage is active, the measurement traffic stamps its
+//! frames with the CAL flag so the receivers route CSI to their calibration
+//! collectors instead of the live pipeline.
 //!
 //! Stages (§17):
 //!   CAL 1  identity + link check      (broadcast START, wait for ACKs)
@@ -19,12 +19,13 @@
 use core::mem;
 
 use radar_calibration::{ClassThresholds, SweepPoint, ThresholdSource, TxPowerModel};
-use radar_protocol::{CalCmd, CalResp, Header, cal_action, cal_stage, frame_type, node};
+use radar_protocol::{CalResp, cal_action, cal_stage, node};
 use radar_storage::nvs::Nvs;
-use radar_transport::udp::{UdpSocket, now_us};
-use radar_transport::{Ipv4Addr, MEASURE_PORT};
+use radar_transport::udp::now_us;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+
+use crate::wired::WiredLink;
 
 /// RSSI the CAL 2 sweep targets: the highest TX power whose *worst* receiver
 /// stays below this is commissioned (spec §5/§6).
@@ -126,7 +127,6 @@ enum Phase {
 }
 
 pub struct Calibrator {
-    cmd_sock: Option<UdpSocket>,
     phase: Phase,
     stage: u8,
     active: bool,
@@ -137,19 +137,11 @@ pub struct Calibrator {
     cal4_count: u32,
     cal4_max_energy: f32,
     cal4_max_dev: f32,
-    seq: u32,
 }
 
 impl Calibrator {
     pub fn new() -> Self {
-        let mut sock = UdpSocket::bind(0).ok();
-        if let Some(s) = sock.as_mut() {
-            s.set_broadcast(true).ok();
-        } else {
-            log::error!("calibration socket unavailable; calibration commands disabled");
-        }
         Self {
-            cmd_sock: sock,
             phase: Phase::Idle,
             stage: 0,
             active: false,
@@ -159,7 +151,6 @@ impl Calibrator {
             cal4_count: 0,
             cal4_max_energy: 0.0,
             cal4_max_dev: 0.0,
-            seq: 0,
         }
     }
 
@@ -181,7 +172,7 @@ impl Calibrator {
         self.pending_thresholds.take()
     }
 
-    pub fn start(&mut self, cmd: CalCommand) {
+    pub fn start(&mut self, cmd: CalCommand, links: &mut [WiredLink; 2]) {
         match cmd {
             CalCommand::Abort => {
                 log::warn!("calibration aborted");
@@ -189,13 +180,13 @@ impl Calibrator {
                 self.stage = 0;
                 self.active = false;
             }
-            CalCommand::StartStage(s) => self.begin_stage(s),
+            CalCommand::StartStage(s) => self.begin_stage(s, links),
             CalCommand::AutoCommission => {
                 if self.has_model {
                     log::info!("power model already present; auto CAL 2 skipped");
                 } else {
                     log::info!("auto-commission: starting CAL 2");
-                    self.begin_stage(cal_stage::RF_POWER);
+                    self.begin_stage(cal_stage::RF_POWER, links);
                 }
             }
         }
@@ -229,7 +220,7 @@ impl Calibrator {
 
     /// Advance the state machine. `tx_power`/`nvs` are used only when a stage
     /// finishes (commissioning / persistence).
-    pub fn tick(&mut self, now: u64, tx_power: &Arc<AtomicU8>, nvs: &Nvs) {
+    pub fn tick(&mut self, now: u64, tx_power: &Arc<AtomicU8>, nvs: &Nvs, links: &mut [WiredLink; 2]) {
         let phase = mem::replace(&mut self.phase, Phase::Idle);
         self.phase = match phase {
             Phase::Idle => Phase::Idle,
@@ -268,7 +259,7 @@ impl Calibrator {
                         idx += 1;
                         let p = SWEEP_POWERS_DBM[idx];
                         set_tx_power(p);
-                        self.broadcast_cmd(cal_stage::RF_POWER, cal_action::COLLECT, SWEEP_COLLECT_MS, p);
+                        self.broadcast_cmd(cal_stage::RF_POWER, cal_action::COLLECT, SWEEP_COLLECT_MS, p, links);
                         Phase::Cal2 { points, idx, wait: Wait::new(now_us() + SWEEP_TIMEOUT_US) }
                     }
                 } else {
@@ -302,13 +293,13 @@ impl Calibrator {
 
     // -- stage drivers -------------------------------------------------------
 
-    fn begin_stage(&mut self, stage: u8) {
+    fn begin_stage(&mut self, stage: u8, links: &mut [WiredLink; 2]) {
         match stage {
             cal_stage::IDENTITY => {
                 self.stage = stage;
                 self.active = true;
                 self.phase = Phase::WaitResp { stage, wait: Wait::new(now_us() + ACK_TIMEOUT_US) };
-                self.broadcast_cmd(stage, cal_action::START, 0, 0);
+                self.broadcast_cmd(stage, cal_action::START, 0, 0, links);
                 log::info!("CAL 1 (identity): probing RX1/RX2");
             }
             cal_stage::RF_POWER => {
@@ -321,7 +312,7 @@ impl Calibrator {
                 };
                 let p = SWEEP_POWERS_DBM[0];
                 set_tx_power(p);
-                self.broadcast_cmd(stage, cal_action::COLLECT, SWEEP_COLLECT_MS, p);
+                self.broadcast_cmd(stage, cal_action::COLLECT, SWEEP_COLLECT_MS, p, links);
                 log::info!("CAL 2 (RF power): sweeping TX power {:?}", &SWEEP_POWERS_DBM[..]);
             }
             cal_stage::EMPTY_ROOM => {
@@ -331,7 +322,7 @@ impl Calibrator {
                     stage,
                     wait: Wait::new(now_us() + ACK_TIMEOUT_US + (CAL3_WINDOW_MS as u64) * 1000),
                 };
-                self.broadcast_cmd(stage, cal_action::COLLECT, CAL3_WINDOW_MS, 0);
+                self.broadcast_cmd(stage, cal_action::COLLECT, CAL3_WINDOW_MS, 0, links);
                 log::info!("CAL 3 (empty room): collecting {} s of baseline on both links", CAL3_WINDOW_MS / 1000);
             }
             cal_stage::MOVING_TEST => {
@@ -342,7 +333,7 @@ impl Calibrator {
                 self.cal4_max_energy = 0.0;
                 self.cal4_max_dev = 0.0;
                 self.phase = Phase::Cal4 { window_start_us: now_us(), window_us: CAL4_WINDOW_US };
-                self.broadcast_cmd(stage, cal_action::COLLECT, (CAL4_WINDOW_US / 1000) as u32, 0);
+                self.broadcast_cmd(stage, cal_action::COLLECT, (CAL4_WINDOW_US / 1000) as u32, 0, links);
                 log::info!("CAL 4 (moving test): observe movement for {} s", CAL4_WINDOW_US / 1_000_000);
             }
             cal_stage::FINGERPRINT => {
@@ -352,7 +343,7 @@ impl Calibrator {
                     stage,
                     wait: Wait::new(now_us() + ACK_TIMEOUT_US + (CAL5_WINDOW_MS as u64) * 1000),
                 };
-                self.broadcast_cmd(stage, cal_action::COLLECT, CAL5_WINDOW_MS, 0);
+                self.broadcast_cmd(stage, cal_action::COLLECT, CAL5_WINDOW_MS, 0, links);
                 log::info!("CAL 5 (fingerprint): capturing");
             }
             other => {
@@ -439,21 +430,20 @@ impl Calibrator {
 
     // -- wire helpers --------------------------------------------------------
 
-    fn broadcast_cmd(&mut self, stage: u8, action: u8, collect_ms: u32, tx_power_db: i16) {
-        let Some(sock) = self.cmd_sock.as_mut() else { return };
-        let cmd = CalCmd { stage, action, collect_ms, tx_power_db };
-        let pl = unsafe {
-            core::slice::from_raw_parts((&cmd as *const CalCmd) as *const u8, core::mem::size_of::<CalCmd>())
-        };
-        let hdr = Header::new(frame_type::CAL_CMD, node::TX, 0, self.seq, now_us(), pl.len() as u16);
-        self.seq = self.seq.wrapping_add(1);
-        let mut buf = [0u8; 128];
-        let n = radar_protocol::build(&mut buf, &hdr, pl);
-        if n == 0 {
-            return;
-        }
-        if let Err(e) = sock.send_to(Ipv4Addr::AP_BROADCAST, MEASURE_PORT, &buf[..n]) {
-            log::warn!("cal command broadcast failed: {e}");
+    fn broadcast_cmd(
+        &mut self,
+        stage: u8,
+        action: u8,
+        collect_ms: u32,
+        tx_power_db: i16,
+        links: &mut [WiredLink; 2],
+    ) {
+        // Every RX listens on its own wired link now; write the command down
+        // both. Fire-and-forget — the Wait phase handles timeouts.
+        for link in links.iter_mut() {
+            if let Err(e) = link.send_cal_cmd(stage, action, collect_ms, tx_power_db) {
+                log::warn!("cal command write failed: {e}");
+            }
         }
     }
 }

@@ -52,9 +52,11 @@ cat > "$NOTES" <<'EOF'
 ## v1 — flash-ready binaries
 
 The three ESP32 boards (LEFT ESP32-CAM → RADAR-RX2, MIDDLE DevKit → RADAR-TX,
-RIGHT DevKit → RADAR-RX1) run the apps below. Inter-chip comms are WiFi-only
-(RATE-1/2/3); the boards form one rigid, fixed sensing head — do not move the
-antennas/receivers apart.
+RIGHT DevKit → RADAR-RX1) run the apps below. The measurement plane is WiFi
+(RATE-1 broadcast — the CSI stimulus); the data plane is **wired UART**
+(RATE-2 FeatureReports, CSI snapshots, CAL_CMD/CAL_RESP), so the RX boards
+never transmit on the 2.4 GHz sensing band. The boards form one rigid, fixed
+sensing head — do not move the antennas/receivers apart.
 
 ### Assets
 
@@ -76,9 +78,12 @@ Use `esptool write_flash` with the merged images (see `docs/flashing.md`).
 - **QEMU full-system boot:** 14/14 milestones PASS for TX and both RX apps.
 - **Inter-chip comms:** 14/14 assertions PASS (`tools/integration --orchestrate`)
   — RATE-1/2/3 framing, CRC, sequence integrity (0 gaps), RX1/RX2 pairing,
-  fusion/controller on TX.
-- **Host tests:** 70/70 unit tests across the 10 host crates; lint clean
-  (rustfmt + clippy `-D warnings`).
+  fusion/controller on TX. The loopback is transport-agnostic: the same
+  `radar_transport` serializers/CRC/Pairer now carry the wired UART data plane
+  on hardware (the byte-stream `framer` for the links is host-tested).
+- **Host tests:** 70/70 unit tests across the 10 host crates (incl. the
+  `radar_transport::framer` byte-stream cases); lint clean (rustfmt + clippy
+  `-D warnings`).
 - On-hardware smoke checklist: `docs/verification.md`.
 
 Binaries built from the source at this tag. `cargo` job `NUM_JOBS=3`.

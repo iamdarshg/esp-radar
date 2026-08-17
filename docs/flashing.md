@@ -15,8 +15,9 @@ There are two distinct paths:
 > Serial programming a *DevKit* is a normal USB-UART flash. The **ESP32-CAM**
 > has no USB port, so it is programmed through the middle DevKit used as a
 > temporary USB-UART adapter — see the dedicated section below. The wiring shown
-> there is **temporary programming wiring only**: it must not be required during
-> normal radar operation.
+> there is **temporary programming wiring only** (the middle DevKit's UART0);
+> it coexists with, and is independent of, the **permanent data-plane wiring**
+> (UART1/UART2) described in the next section.
 
 ## Building first
 
@@ -34,6 +35,46 @@ For serial flashing, the release pipeline also produces **merged flash images**
 bootloader + partition table + app in one file) that `esptool` writes in a
 single shot; see "Serial flashing" below.
 
+## Normal-operation wiring (the data plane)
+
+During normal radar operation the three boards are wired together with two
+crossed UART links plus one shared ground rail. These wires are **permanent**
+— unlike the temporary programming hookup used to flash the ESP32-CAM (next
+sections).
+
+```text
+LINK 1 — RADAR-TX (middle) UART1  ↔  RADAR-RX1 (DevKit) UART1
+  middle GPIO18 (TX1)  ──→  rx1 GPIO19 (RX1)     [TX→RX]
+  middle GPIO19 (RX1)  ←──  rx1 GPIO18 (TX1)     [RX←TX]
+
+LINK 2 — RADAR-TX (middle) UART2  ↔  RADAR-RX2 (ESP32-CAM) UART1
+  middle GPIO17 (TX2)  ──→  cam IO13 (RX1)       [TX→RX]
+  middle GPIO16 (RX2)  ←──  cam IO14 (TX1)       [RX←TX]
+
+GND — all three board GND pins tied to one rail (common reference)
+```
+
+Notes:
+
+* **Measurement plane stays WiFi.** The middle DevKit broadcasts the RATE-1
+  measurement frames on 2.4 GHz (that is the signal the receivers measure) and
+  runs the AP the dashboard rides on. The RX boards **receive only** — they no
+  longer transmit on the sensing band.
+* **Data plane is wired.** FeatureReports (~10 Hz), CSI snapshots (~2 Hz) and
+  calibration responses go RX→TX over these UARTs; calibration commands go
+  TX→RX. Baud 460800 (drop to 230400 if a link shows continuous CRC failures).
+* **Common GND is required** — the UART signals are 3V3-referenced to the
+  shared rail, so all three boards must share one ground reference. UART RX
+  pins have internal pull-ups (idle-high), so an unplugged wire reads as a
+  defined level, never a floating input.
+* The CAM's UART1 pins are IO14 (TX) and IO13 (RX) — the middle DevKit's UART2
+  (GPIO17 TX / GPIO16 RX) crosses onto them. RX1's pins mirror the middle's
+  UART1 (GPIO18/19).
+* The CAM-programming hookup (next section) uses the middle DevKit's **UART0**
+  (GPIO1/3); the data plane uses UART1/UART2, so the two wiring schemes share
+  no pin and can coexist — you can leave the data-plane wiring in place while
+  flashing the CAM.
+
 ## Serial flashing (RADAR-TX, RADAR-RX1)
 
 Both DevKit boards expose a USB-UART bridge, so they flash the standard way.
@@ -42,10 +83,10 @@ partition table + app concatenated at their fixed offsets in one file),
 programmed with `esptool`:
 
 ```bash
-# RADAR-TX (left DevKit) — OTA-capable table (factory + ota_0 + ota_1)
+# RADAR-TX (middle DevKit) — OTA-capable table (factory + ota_0 + ota_1)
 esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_tx_merged.bin
 
-# RADAR-RX1 (middle DevKit) — default single-app table
+# RADAR-RX1 (right DevKit) — default single-app table
 esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_rx_merged.bin
 ```
 
@@ -126,7 +167,10 @@ programmer RX ← target TX
 12. Remove the temporary programming UART wiring when complete.
 13. Release middle DevKit EN from GND.
 
-Do not require these UART wires during normal radar operation.
+These programming wires (UART0 / GPIO0 / EN) are removed after flashing and
+are **not** required during normal operation. The CAM's **data-plane** wiring
+from the previous section (IO13/IO14 ↔ middle GPIO16/17) is permanent and
+independent — the temporary hookup only touches the middle DevKit's UART0.
 
 Flashing `RADAR-RX2` is otherwise identical to the DevKit flash: the same
 `radar_rx` firmware (it is the *same binary* as RX1 — the node role is resolved
@@ -159,9 +203,9 @@ image and can roll back.
 
 | Board | Firmware source | App | Method |
 |-------|-----------------|-----|--------|
-| RADAR-TX (left DevKit) | `firmware/radar_tx` | `radar_tx` | USB-UART serial, then OTA |
-| RADAR-RX1 (middle DevKit) | `firmware/radar_rx` | `radar_rx` | USB-UART serial |
-| RADAR-RX2 (ESP32-CAM) | `firmware/radar_rx` | `radar_rx` | middle DevKit as UART adapter |
+| RADAR-TX (middle DevKit) | `firmware/radar_tx` | `radar_tx` | USB-UART serial, then OTA |
+| RADAR-RX1 (right DevKit) | `firmware/radar_rx` | `radar_rx` | USB-UART serial |
+| RADAR-RX2 (ESP32-CAM, left) | `firmware/radar_rx` | `radar_rx` | middle DevKit as UART adapter |
 
 > The merged images (`.scratch/flash/*.bin`) are built in TX-then-RX order, so
 > the embedded bootloader reflects the **last** `esp-idf-sys` build (currently

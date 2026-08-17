@@ -29,11 +29,16 @@ use radar_web::telemetry::StatusSnapshot;
 use crate::calibrate::CalCommand;
 
 mod calibrate;
+// The RP2350 coprocessor link (UART2/GPIO16-17) is suspended: those pins are
+// now the wired data-plane link to RADAR-RX2/CAM. The module stays compiled
+// for future use once the coprocessor gets its own pins.
+#[allow(dead_code)]
 mod cp;
 mod fusion;
 mod httpd;
 mod traffic;
 mod wifi;
+mod wired;
 
 fn main() -> anyhow::Result<()> {
     // esp-idf-sys's `binstart` feature needs link_patches() before anything
@@ -104,6 +109,16 @@ fn main() -> anyhow::Result<()> {
     let (cal_tx, cal_rx) = mpsc::channel::<CalCommand>();
     httpd::register(&mut dashboard, cal_tx)?;
 
+    // -- wired data plane ------------------------------------------------------
+    // The two RX boards report over crossed UART links instead of WiFi, so
+    // they never transmit on the 2.4 GHz sensing band:
+    //   UART1 GPIO18 TX / GPIO19 RX  ←→  RADAR-RX1 (right DevKit) GPIO19/18
+    //   UART2 GPIO17 TX / GPIO16 RX  ←→  RADAR-RX2 (CAM)         IO13 / IO14
+    // (UART2/GPIO16-17 were the RP2350 coprocessor pins; that task is parked
+    // in `cp.rs` for future use.)
+    let link1 = wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio18, peripherals.pins.gpio19)?;
+    let link2 = wired::WiredLink::open(peripherals.uart2, peripherals.pins.gpio17, peripherals.pins.gpio16)?;
+
     // -- tasks ----------------------------------------------------------------
     // The traffic closure is `move`, so it would swallow the `tx_power` /
     // `cal_active` bindings even though it only clones them; pre-clone so the
@@ -126,14 +141,8 @@ fn main() -> anyhow::Result<()> {
             cal_active,
             cal_rx,
             nvs,
+            links: [link1, link2],
         }))?;
-
-    std::thread::Builder::new()
-        .stack_size(4096)
-        .name("copro".into())
-        .spawn(move || {
-            cp::run(peripherals.uart2, peripherals.pins.gpio17, peripherals.pins.gpio16)
-        })?;
 
     log::info!(
         "RADAR-TX ready — AP '{}' ch{} → http://192.168.4.1",

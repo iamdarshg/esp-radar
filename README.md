@@ -37,9 +37,9 @@ move. See the supplied photograph (`IMG_9F899C38-89DF-446E-BFB1-46FE287B91C3.jpe
 
 | Node | Hardware | Role | Responsibilities |
 |------|----------|------|-----------------|
-| **RADAR-TX** | Left ESP32 DevKit (rotated 180° vs. the middle) | AP + fusion + dashboard host + calibration host + OTA host | Generates the 2.4 GHz measurement traffic, owns the global packet sequence number, coordinates the radar session, receives processed features from RX1 and RX2, fuses them, and serves the standalone web dashboard, `/cal` and `/ota` endpoints. Optionally talks to an RP2350 coprocessor. |
-| **RADAR-RX1** | Middle ESP32 DevKit | CSI capture + DSP | Receives TX measurement frames, captures CSI, runs the DSP/PCA/STFT pipeline, and reports compact high-rate features to TX. |
-| **RADAR-RX2** | ESP32-CAM | CSI capture + DSP (same firmware as RX1) | Captures a second, spatially/diversely-placed CSI observation of the *same* TX packets and reports the same features. Runs the identical `radar_rx` firmware; the node role is resolved at boot (NVS, else PSRAM presence — only the ESP32-CAM has PSRAM). Carries a microSD slot; SD recording is currently deferred in the code. |
+| **RADAR-TX** | Middle ESP32 DevKit | AP + fusion + dashboard host + calibration host + OTA host | Generates the 2.4 GHz measurement traffic, owns the global packet sequence number, coordinates the radar session, receives processed features from RX1 and RX2 over the wired UART data plane, fuses them, and serves the standalone web dashboard, `/cal` and `/ota` endpoints. (The optional RP2350 coprocessor task is parked — its pins are the RX2 link.) |
+| **RADAR-RX1** | Right ESP32 DevKit | CSI capture + DSP | Receives TX measurement frames, captures CSI, runs the DSP/PCA/STFT pipeline, and reports compact high-rate features to TX over a wired UART link. |
+| **RADAR-RX2** | ESP32-CAM (left) | CSI capture + DSP (same firmware as RX1) | Captures a second, spatially/diversely-placed CSI observation of the *same* TX packets and reports the same features over its own wired UART link. Runs the identical `radar_rx` firmware; the node role is resolved at boot (NVS, else PSRAM presence — only the ESP32-CAM has PSRAM). Carries a microSD slot; SD recording is currently deferred in the code. |
 
 RX1 and RX2 are **independent, non-coherent** observations of the same
 transmitted packets. They are paired by TX packet sequence number, never by RF
@@ -50,12 +50,16 @@ phase — the two ESP32s are not a coherent phased array.
 ```
 RADAR-TX  (AP "ESP32-RADAR", 192.168.4.1, channel 6)
    |
-   | UDP broadcast DataFrame, one per seq, 192.168.4.255:4444, 200/s
+   | MEASUREMENT PLANE (WiFi): UDP broadcast DataFrame, one per seq,
+   | 192.168.4.255:4444, 200/s  ← the CSI stimulus
    |----------> RADAR-RX1  (STA, CSI capture + DSP)
    |----------> RADAR-RX2  (STA, CSI capture + DSP)
    |
-   |<----------- FeatureReport (RX -> TX, unicast, port 4445, every 20 frames)
+   | DATA PLANE (wired UART, crossed 2-wire links, common GND):
+   |<----------- FeatureReport (RX -> TX, every 20 frames)
    |<----------- CsiSnapshot  (RX -> TX, ~2 Hz, for the waterfall/spectrogram)
+   |<----------- CAL_RESP     (RX -> TX)
+   |-----------> CAL_CMD      (TX -> RX, both links)
    |
    |   (TX pairs RX1/RX2 reports by seq, fuses, runs occupancy classifier)
    |
@@ -65,6 +69,11 @@ RADAR-TX  (AP "ESP32-RADAR", 192.168.4.1, channel 6)
    |--- HTTP  /cal     calibration control
    |--- HTTP  /ota     firmware upload
 ```
+
+The RX boards **never transmit on 2.4 GHz** — they only receive the
+measurement broadcast. Their reports, snapshots and calibration responses go
+to TX over the wired UART data plane (`docs/flashing.md` → Normal-operation
+wiring); TX's own radio keeps the measurement broadcast and the dashboard AP.
 
 A phone/tablet connects directly to the `ESP32-RADAR` AP and opens
 `http://192.168.4.1`. No laptop, router or internet is required after
@@ -81,7 +90,9 @@ crates/                  shared Rust libraries (pure crates are host-testable)
   radar_features/        per-link features, RX1/RX2 fusion, occupancy state machine
   radar_calibration/     CAL 1-5 artifacts: empty-room baseline, TX power model,
                          classifier thresholds
-  radar_transport/       UDP measurement frames (TX->RX) + feature reports
+  radar_transport/       wire frames: measurement broadcast (TX->RX WiFi) +
+                         report/snapshot/cal builders+parsers + a byte-stream
+                         `framer` for the wired UART data plane
                          (RX->TX), gap tracking, cross-link pairing
   radar_storage/         NVS persistence of config + calibration artifacts
   radar_web/             dashboard server: HTTP + WebSocket binary telemetry,

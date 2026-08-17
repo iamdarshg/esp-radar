@@ -24,12 +24,14 @@ use esp_idf_svc::log::EspLogger;
 
 use radar_csi::wifi::{start_csi, CsiConfig};
 use radar_csi::CsiRing;
+use radar_protocol::node;
 use radar_storage::nvs::Nvs;
 use radar_storage::RadarConfig;
 
 mod link;
 mod radar;
 mod wifi;
+mod wired;
 
 fn main() -> anyhow::Result<()> {
     // esp-idf-sys's `binstart` feature needs link_patches() before anything
@@ -72,6 +74,22 @@ fn main() -> anyhow::Result<()> {
     let ring: &'static CsiRing = Box::leak(Box::new(CsiRing::new(128)));
     start_csi(ring, &CsiConfig::default()).map_err(|e| anyhow::anyhow!("csi start: {e}"))?;
 
+    // -- wired data plane -----------------------------------------------------
+    // Reports/CAL/snapshots go over UART, not WiFi, so this board stops
+    // transmitting on the 2.4 GHz sensing band. The role match gives each
+    // board its crossed-pair pins (the other arm's pins are never moved):
+    //   RX1 (DevKit): UART1 GPIO18 TX / GPIO19 RX  ←→  middle GPIO19 / GPIO18
+    //   RX2 (CAM):    UART1 GPIO14 TX / GPIO13 RX  ←→  middle GPIO16 / GPIO17
+    let wired = match node_id {
+        n if n == node::RX1 => {
+            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio18, peripherals.pins.gpio19)?
+        }
+        n if n == node::RX2 => {
+            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio14, peripherals.pins.gpio13)?
+        }
+        _ => unreachable!("rx_link_for guaranteed a receiver role"),
+    };
+
     // -- measurement / DSP / calibration loop --------------------------------
     std::thread::Builder::new()
         .stack_size(16384)
@@ -81,6 +99,7 @@ fn main() -> anyhow::Result<()> {
                 config,
                 node_id,
                 link,
+                wired,
                 ring,
                 nvs,
                 ap_bssid,

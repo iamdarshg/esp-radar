@@ -1,7 +1,8 @@
 //! RX fusion + calibration controller (spec §6, §15, §17).
 //!
-//! This task owns the REPORT_PORT socket — the single place RX1/RX2
-//! [`FeatureReport`]s and calibration responses land. It:
+//! This task owns the two wired UART links — the single place RX1/RX2
+//! [`FeatureReport`]s and calibration responses land (the data plane moved
+//! off WiFi so neither RX transmits on the sensing band). It:
 //!
 //! * pairs the two links' reports by TX sequence ([`Pairer`], §15),
 //! * fuses them into cross-link metrics and runs the occupancy classifier (§6),
@@ -27,20 +28,17 @@ use radar_protocol::{
 };
 use radar_storage::nvs::Nvs;
 use radar_storage::RadarConfig;
-use radar_transport::udp::{UdpSocket, now_us, recv_radar_frame};
-use radar_transport::{Pairer, REPORT_PORT, SequenceTracker, parse_feature_report};
+use radar_transport::udp::now_us;
+use radar_transport::{Pairer, SequenceTracker, parse_feature_report};
 use radar_web::server::TelemetryBroadcaster;
 use radar_web::telemetry::{
     StatusFrame, StatusSnapshot, SpectrogramFrame, WaterfallFrame, link as wl,
 };
 
 use crate::calibrate::{CalCommand, Calibrator};
+use crate::wired::WiredLink;
 
-/// Per-recv blocking timeout on the report socket. Long enough that the task
-/// isn't busy-spinning, short enough that calibration commands and the
-/// 1 Hz telemetry cadence stay responsive.
-const REPORT_TIMEOUT_MS: i32 = 50;
-/// Sleep between socket reads when idle.
+/// Sleep between link polls when idle.
 const TICK_SLEEP_MS: u64 = 10;
 /// Rolling length of the CSI-snapshot rings (≈10 s at ~5 Hz).
 const RING_CAP: usize = 48;
@@ -60,6 +58,8 @@ pub struct RunParams {
     pub cal_active: Arc<AtomicBool>,
     pub cal_rx: mpsc::Receiver<CalCommand>,
     pub nvs: Nvs,
+    /// Wired links to the RX boards (index 0 = RX1, 1 = RX2).
+    pub links: [WiredLink; 2],
 }
 
 /// Rolling per-link CSI columns from the low-rate `CSI_SNAPSHOT` frames.
@@ -92,21 +92,12 @@ impl SnapshotRing {
 }
 
 pub fn run(p: RunParams) {
-    let RunParams { config, status, broadcaster, tx_power, cal_active, cal_rx, nvs } = p;
+    let RunParams { config, status, broadcaster, tx_power, cal_active, cal_rx, nvs, mut links } = p;
 
-    // The report socket: FeatureReports + CalResps from both RX links.
-    let mut sock = match UdpSocket::bind(REPORT_PORT) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("report socket bind failed: {e}; fusion disabled");
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-            }
-        }
-    };
-    if let Err(e) = sock.set_recv_timeout(REPORT_TIMEOUT_MS) {
-        log::warn!("report socket recv timeout not set: {e}");
-    }
+    // The two wired links carry every inbound report/CAL_RESP/snapshot from
+    // the RX boards; the measurement plane (RATE-1 WiFi DataFrames) is the
+    // traffic task's, untouched.
+    log::info!("fusion controller up: two wired links to RX1/RX2");
 
     // Classifier. Prefer the calibrated thresholds when present (CAL 4 output).
     let thresholds = nvs.load_thresholds().unwrap_or_default();
@@ -147,18 +138,15 @@ pub fn run(p: RunParams) {
     let mut auto_cal_sent = false;
     let mut next_status = Instant::now();
     let mut next_rings = Instant::now();
-    let mut recv_buf = [0u8; 1024];
-
-    log::info!("fusion controller up on port {REPORT_PORT}");
 
     loop {
         // 1. Calibration commands from the /cal HTTP endpoint.
         while let Ok(cmd) = cal_rx.try_recv() {
-            cal.start(cmd);
+            cal.start(cmd, &mut links);
         }
 
         // 2. Advance the calibration state machine; apply finished thresholds.
-        cal.tick(now_us(), &tx_power, &nvs);
+        cal.tick(now_us(), &tx_power, &nvs, &mut links);
         if let Some(t) = cal.take_thresholds() {
             if let Err(e) = nvs.store_thresholds(&t) {
                 log::warn!("could not store calibrated thresholds: {e}");
@@ -175,52 +163,56 @@ pub fn run(p: RunParams) {
         {
             auto_cal_sent = true;
             log::info!("boot auto-commission triggered (no stored power model)");
-            cal.start(CalCommand::AutoCommission);
+            cal.start(CalCommand::AutoCommission, &mut links);
         }
 
-        // 4. Drain the report socket.
-        while let Some((kind, src, seq, payload, _peer, _port)) =
-            recv_radar_frame(&mut sock, &mut recv_buf)
-        {
-            match kind {
-                frame_type::FEATURE_REPORT => {
-                    if let Some(report) = parse_feature_report(payload) {
-                        match src {
-                            node::RX1 => {
-                                rx1_seen = true;
-                                track1.observe(seq);
-                                last_rep1 = Some(report);
-                                last_lf1 = features_from_report(&report);
+        // 4. Drain both wired links. The frame header carries the source node,
+        //    so which physical link a frame arrived on is irrelevant.
+        for link in links.iter_mut() {
+            for frame in link.poll() {
+                let kind = frame.kind();
+                let src = frame.src();
+                let seq = frame.seq();
+                match kind {
+                    frame_type::FEATURE_REPORT => {
+                        if let Some(report) = parse_feature_report(&frame.payload) {
+                            match src {
+                                node::RX1 => {
+                                    rx1_seen = true;
+                                    track1.observe(seq);
+                                    last_rep1 = Some(report);
+                                    last_lf1 = features_from_report(&report);
+                                }
+                                node::RX2 => {
+                                    rx2_seen = true;
+                                    track2.observe(seq);
+                                    last_rep2 = Some(report);
+                                    last_lf2 = features_from_report(&report);
+                                }
+                                _ => {}
                             }
-                            node::RX2 => {
-                                rx2_seen = true;
-                                track2.observe(seq);
-                                last_rep2 = Some(report);
-                                last_lf2 = features_from_report(&report);
-                            }
-                            _ => {}
-                        }
-                        pairer.push(src, report, now_us());
-                    }
-                }
-                frame_type::CAL_RESP => {
-                    if let Some(resp) = parse_cal_resp(payload) {
-                        cal.on_resp(src, resp);
-                    }
-                }
-                frame_type::CSI_SNAPSHOT => {
-                    if let Some(snap) = parse_csi_snapshot(payload) {
-                        // Copy packed-array fields out by value (E0793).
-                        let amp = snap.amp_norm;
-                        let spec = snap.spec;
-                        match src {
-                            node::RX1 => ring1.push(&amp, &spec),
-                            node::RX2 => ring2.push(&amp, &spec),
-                            _ => {}
+                            pairer.push(src, report, now_us());
                         }
                     }
+                    frame_type::CAL_RESP => {
+                        if let Some(resp) = parse_cal_resp(&frame.payload) {
+                            cal.on_resp(src, resp);
+                        }
+                    }
+                    frame_type::CSI_SNAPSHOT => {
+                        if let Some(snap) = parse_csi_snapshot(&frame.payload) {
+                            // Copy packed-array fields out by value (E0793).
+                            let amp = snap.amp_norm;
+                            let spec = snap.spec;
+                            match src {
+                                node::RX1 => ring1.push(&amp, &spec),
+                                node::RX2 => ring2.push(&amp, &spec),
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 

@@ -104,12 +104,24 @@ air; the only thing not exercised literally is the single-broadcast-datagram
 reception by both RX stations. Real over-the-air reception of a broadcast is an
 on-hardware smoke item below.
 
+On the physical head the RATE-2/RATE-3/CAL flows (the ones this loopback
+validates) move to the **wired UART data plane** (`docs/flashing.md` →
+Normal-operation wiring) while the measurement plane stays WiFi. The loopback
+harness is transport-agnostic: it exercises the same `radar_transport`
+serializers, CRC and `Pairer`/`SequenceTracker` logic the wired links now carry.
+The `framer` byte-stream decoder that pulls frames off the UART is covered
+separately by host unit tests in `radar_transport` (see §5).
+
 ## 5. Host unit tests & pipeline emulation (prior, committed)
 
 The pure crates carry unit tests (round-trips, CRC rejection, seq tracking) and
 a host end-to-end pipeline emulation was run before this plan; those remain
 green under the current tree (host `cargo test` from the repo root works; the
-firmware-only release profile does not affect host builds).
+firmware-only release profile does not affect host builds). The wired data
+plane adds `radar_transport::framer` — a byte-stream frame extractor (magic
+hunt + length + CRC resync) with host tests for single/split/garbage-prefixed/
+concatenated/corrupt/bounded/empty-payload frames — all green alongside the
+existing transport tests.
 
 ---
 
@@ -119,36 +131,43 @@ QEMU has no WiFi MAC/PHY, this machine has no ESP32 hardware, and the
 ESP32-CAM's PSRAM is only present on the real board. The following are the
 deliberate gaps — confirm each on the real head before trusting a deployment:
 
-1. **AP + over-the-air RATE-1/2/3.** RADAR-TX's `ESP32-RADAR` AP comes up on
+1. **AP + over-the-air RATE-1.** RADAR-TX's `ESP32-RADAR` AP comes up on
    channel 6; both RX stations associate and receive the 200 Hz broadcast
-   stream; RX1/RX2 send RATE-2/3 reports back; TX fusion pairs them. This is the
-   one thing QEMU/loopback cannot prove (single broadcast to both RX, real RF
-   propagation). Use `tools/integration`'s three roles on the host as a
-   comparison baseline, but the over-the-air path is hardware-only.
-2. **RADAR-RX2 role inference.** On the real ESP32-CAM, first boot should log
+   stream (the measurement plane). This is the one thing QEMU/loopback cannot
+   prove (single broadcast to both RX, real RF propagation). Use
+   `tools/integration`'s three roles on the host as a comparison baseline, but
+   the over-the-air path is hardware-only.
+2. **Wired data plane (both links).** After wiring per `docs/flashing.md` →
+   Normal-operation wiring, the dashboard at `http://192.168.4.1` should show
+   both links reporting: each RX's RSSI/quality in `/status` and the waterfall
+   updating (RATE-3 snapshots arrive over UART). A `/cal` round-trip completes
+   — CAL 1 identity acks from both RX over the wire. If a link shows continuous
+   CRC failures, check the RX pull-up / wiring first, then drop both sides to
+   baud 230400.
+3. **RADAR-RX2 role inference.** On the real ESP32-CAM, first boot should log
    `node role inferred from hardware: RADAR-RX2` (PSRAM present), then persist
    `RADAR-RX2` to NVS. If it logs `RADAR-RX1`, the PSRAM connection or
    `CONFIG_SPIRAM_BOOT_INIT` path needs attention.
-3. **SPIRAM-configured bootloader on the no-PSRAM TX board.** The merged TX
+4. **SPIRAM-configured bootloader on the no-PSRAM TX board.** The merged TX
    image carries the bootloader built with radar_rx's SPIRAM-enabled config
    (the brief's single-bootloader choice). `CONFIG_SPIRAM_IGNORE_NOTFOUND=y`
    should make the bootloader's PSRAM-init failure non-fatal — confirm TX boots
    to its AP.
-4. **Panic behavior + logging.** `panic = "immediate-abort"` aborts without a
+5. **Panic behavior + logging.** `panic = "immediate-abort"` aborts without a
    Rust backtrace (the C panic handler still prints the message). The firmware
    panic path was never observed on the boot path; confirm nothing panics during
    normal operation, and that `log::info!` output (which goes through Rust's fmt,
    not newlib printf) is intact under newlib nano-format.
-5. **DSP throughput at 200 Hz on radar_rx.** The workspace profile's
+6. **DSP throughput at 200 Hz on radar_rx.** The workspace profile's
    `opt-level="z"` (size-optimized) applies to the DSP crates too. Confirm the
    RX boards keep up with the incoming 200 Hz stream (feature report cadence and
    CSI snapshots don't starve). If frames back up, a per-crate
    `[profile.release.package.radar_dsp]` opt-level override is the lever.
-6. **OTA on RADAR-TX.** The real flash uses the otadata-bearing OTA table, so
+7. **OTA on RADAR-TX.** The real flash uses the otadata-bearing OTA table, so
    `mark_app_valid` should succeed (it fails benignly only because the QEMU
    table has no otadata). Exercise one dashboard OTA upload
    (`http://192.168.4.1/ota`) and the rollback path.
-7. **Headroom.** `radar_tx` has only **10,048 B** of slot margin. Any firmware
+8. **Headroom.** `radar_tx` has only **10,048 B** of slot margin. Any firmware
    feature growth must be size-checked before it fits; the fallback is enlarging
    the OTA slots in `firmware/radar_tx/partitions_ota.csv` (do not shrink the
    factory slot below what the bootloader needs).

@@ -9,17 +9,21 @@
 //!      `decode_channel` → `Normalizer` (baseline z-score) → temporal band-pass
 //!      (per-subcarrier Biquad HP+LP, human-motion band) → PCA → PC1.
 //!   3. Accumulates per-window link statistics, and every `report_every` frames
-//!      emits a compact [`FeatureReport`] to RADAR-TX (report port).
+//!      emits a compact [`FeatureReport`] to RADAR-TX over the wired link.
 //!   4. Every `~2 Hz` emits a [`CsiSnapshot`] with the per-subcarrier IQ /
 //!      normalized amplitudes and the current motion-spectrum column (the
-//!      dashboard's LIVE WATERFALL).
-//!   5. Serves the calibration protocol: RADAR-TX broadcasts `CalCmd`s on the
-//!      measurement port; this loop collects the stage window and answers with
-//!      a `CalResp` (RF-power sweep, empty-room baseline → NVS, moving test,
+//!      dashboard's LIVE WATERFALL) — also over the wire.
+//!   5. Serves the calibration protocol: RADAR-TX sends `CalCmd`s down the same
+//!      wired link; this loop collects the stage window and answers with a
+//!      `CalResp` (RF-power sweep, empty-room baseline → NVS, moving test,
 //!      fingerprint).
 //!
+//! The measurement plane is untouched: RATE-1 `DataFrame`s still arrive on the
+//! WiFi measurement port. Only the RX→TX data plane moved to the UART, so this
+//! board no longer transmits on the 2.4 GHz sensing band.
+//!
 //! Nothing here ever returns — `run` blocks forever, keeping the leaked
-//! `CsiRing`, the reporter socket and the calibration state alive.
+//! `CsiRing`, the wired link and the calibration state alive.
 
 use std::collections::VecDeque;
 
@@ -34,10 +38,11 @@ use radar_protocol::{cal_action, cal_result, cal_stage, frame_type, CalCmd, CalR
 use radar_protocol::{CsiSnapshot, FeatureReport, MAX_PCA, N_SPEC_BINS};
 use radar_storage::nvs::Nvs;
 use radar_storage::{RadarConfig, RxLink};
-use radar_transport::udp::{now_us, recv_radar_frame, FeatureReporter, UdpSocket};
+use radar_transport::udp::{now_us, recv_radar_frame, UdpSocket};
 use radar_transport::MEASURE_PORT;
 
 use crate::link::role_name;
+use crate::wired::WiredLink;
 
 /// Length of the rolling PC1 history that feeds the STFT (matches the
 /// protocol's `N_SPEC_BINS` count: an `fft_len` of 128 → 64 magnitude bins).
@@ -58,6 +63,8 @@ pub struct RunParams {
     pub config: RadarConfig,
     pub node_id: u8,
     pub link: RxLink,
+    /// Wired UART link to RADAR-TX (reports/snapshots/CAL_RESP up, CAL_CMD down).
+    pub wired: WiredLink,
     pub ring: &'static CsiRing,
     pub nvs: Nvs,
     pub ap_bssid: [u8; 6],
@@ -231,7 +238,7 @@ impl CalCollect {
 
 /// Main loop. Blocks forever.
 pub fn run(params: RunParams) -> ! {
-    let RunParams { config, node_id, link, ring, nvs, ap_bssid } = params;
+    let RunParams { config, node_id, link, mut wired, ring, nvs, ap_bssid } = params;
     let fs = config.tx_rate_hz as f32;
     let report_every = config.report_every.max(1) as u32;
     let snapshot_every = (report_every * SNAPSHOT_FACTOR).max(report_every);
@@ -246,12 +253,12 @@ pub fn run(params: RunParams) -> ! {
     }
     let mut pipe = Pipeline::new(baseline, fs);
 
-    // UDP: measurement traffic + CalCmds come in on the measurement port
-    // (broadcast); reports/snapshots/responses go out on the report port to
-    // the AP address (learned from the data stream, robust to a changed AP IP).
+    // The measurement plane stays on WiFi: RATE-1 DataFrames arrive on the
+    // measurement port. Reports/snapshots/CAL_RESP now go up the wired link
+    // and CAL_CMD comes down it, so no report socket is bound — this board no
+    // longer transmits on the 2.4 GHz sensing band.
     let mut sock = UdpSocket::bind(MEASURE_PORT).expect("bind measurement port");
     sock.set_recv_timeout(20).expect("set recv timeout");
-    let mut reporter = FeatureReporter::bind(0).expect("bind report socket");
     let mut rbuf = [0u8; 256];
 
     let mut cal = CalCollect::None;
@@ -310,7 +317,7 @@ pub fn run(params: RunParams) -> ! {
                 );
                 ring_overflow = ring.overflow_count();
                 win_start_seq = last_tx_seq;
-                if let Err(e) = reporter.send(node_id, &report) {
+                if let Err(e) = wired.send_feature_report(node_id, &report) {
                     log::warn!("report send failed: {e}");
                 }
                 window.reset();
@@ -319,7 +326,7 @@ pub fn run(params: RunParams) -> ! {
                 // default 200 Hz rate).
                 if frame_idx % snapshot_every == 0 {
                     let snap = make_snapshot(&pipe, &ch, fs, last_tx_seq);
-                    if let Err(e) = reporter.send_csi_snapshot(node_id, &snap) {
+                    if let Err(e) = wired.send_csi_snapshot(node_id, &snap) {
                         log::warn!("snapshot send failed: {e}");
                     }
                 }
@@ -329,28 +336,29 @@ pub fn run(params: RunParams) -> ! {
         // -- 2. Calibration deadline ----------------------------------------
         if let Some(deadline) = active_deadline(&cal) {
             if now_us() >= deadline {
-                finalize_cal(&mut cal, &mut reporter, node_id, &nvs, link, &mut pipe);
+                finalize_cal(&mut cal, &mut wired, node_id, &nvs, link, &mut pipe);
             }
         }
 
-        // -- 3. Incoming measurement / CalCmd frames -------------------------
-        if let Some((kind, _src, seq, payload, peer_ip, peer_port)) =
+        // -- 3. Incoming measurement frames (WiFi) ----------------------------
+        // Only RATE-1 DataFrames arrive on the measurement port now.
+        if let Some((kind, _src, seq, _payload, _peer_ip, _peer_port)) =
             recv_radar_frame(&mut sock, &mut rbuf)
         {
-            match kind {
-                frame_type::DATA_FRAME => {
-                    last_tx_seq = seq;
-                    // Point the reporter at the TX as seen on the wire (the AP
-                    // IP is normally 192.168.4.1, but be robust).
-                    reporter.learn_target(peer_ip, peer_port);
+            if kind == frame_type::DATA_FRAME {
+                last_tx_seq = seq;
+            }
+        }
+
+        // -- 4. Inbound wired frames ------------------------------------------
+        // CAL_CMD arrives down the UART; anything else on the wire is logged
+        // and dropped.
+        for frame in wired.poll() {
+            if frame.kind() == frame_type::CAL_CMD {
+                if frame.payload.len() >= core::mem::size_of::<CalCmd>() {
+                    let cmd = unsafe { (frame.payload.as_ptr() as *const CalCmd).read_unaligned() };
+                    handle_cal_cmd(&mut cal, &cmd, &mut wired, node_id);
                 }
-                frame_type::CAL_CMD => {
-                    if payload.len() >= core::mem::size_of::<CalCmd>() {
-                        let cmd = unsafe { (payload.as_ptr() as *const CalCmd).read_unaligned() };
-                        handle_cal_cmd(&mut cal, &cmd, &mut reporter, node_id);
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -371,7 +379,7 @@ fn active_deadline(cal: &CalCollect) -> Option<u64> {
 fn handle_cal_cmd(
     cal: &mut CalCollect,
     cmd: &CalCmd,
-    reporter: &mut FeatureReporter,
+    wired: &mut WiredLink,
     node_id: u8,
 ) {
     if cmd.action == cal_action::ABORT {
@@ -397,7 +405,7 @@ fn handle_cal_cmd(
                 ..Default::default()
             };
             log::info!("CAL 1: identity ack");
-            if let Err(e) = reporter.send_cal_resp(node_id, &resp) {
+            if let Err(e) = wired.send_cal_resp(node_id, &resp) {
                 log::warn!("identity ack failed: {e}");
             }
         }
@@ -433,7 +441,7 @@ fn handle_cal_cmd(
 /// normalizer so the freshly-captured empty-room state becomes the reference.
 fn finalize_cal(
     cal: &mut CalCollect,
-    reporter: &mut FeatureReporter,
+    wired: &mut WiredLink,
     node_id: u8,
     nvs: &Nvs,
     link: RxLink,
@@ -501,7 +509,7 @@ fn finalize_cal(
     };
 
     log::info!("{name}: {log_line}");
-    if let Err(e) = reporter.send_cal_resp(node_id, &resp) {
+    if let Err(e) = wired.send_cal_resp(node_id, &resp) {
         log::warn!("cal response send failed: {e}");
     }
 }

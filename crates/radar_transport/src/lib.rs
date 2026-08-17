@@ -528,6 +528,14 @@ pub fn build_csi_snapshot(dst: &mut [u8], src: u8, snap: &CsiSnapshot, t_us: u64
 #[cfg(feature = "device")]
 pub mod udp;
 
+/// Byte-stream framing for the wired inter-board UART links (host-pure).
+///
+/// The UDP path consumes whole datagrams; a UART gives a byte stream with no
+/// packet boundaries. [`framer::RadarFrameDecoder`] buffers bytes, hunts the
+/// "RDR1" magic, validates CRC, and resyncs on garbage — the wired sibling of
+/// the [`udp`] module, sharing the same `radar_protocol` frame format.
+pub mod framer;
+
 #[cfg(test)]
 mod tests {
     use super::*;
