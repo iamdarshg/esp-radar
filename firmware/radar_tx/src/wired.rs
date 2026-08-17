@@ -8,8 +8,10 @@
 //!
 //! [`WiredLink`] is not generic over the UART peripheral: `UartDriver` erases
 //! it at construction (the UART type is a `new`-level generic), so one struct
-//! serves both links — UART1 to RADAR-RX1 (GPIO18/19) and UART2 to
-//! RADAR-RX2/CAM (GPIO17/16).
+//! serves both links — UART1 to RADAR-RX1 (GPIO17/16) and UART2 to
+//! RADAR-RX2/CAM (GPIO23/22). The GPIO matrix routes each UART to the pins on
+//! the board edge facing its neighbour, so both links are short parallel
+//! jumpers across the board gaps.
 
 use esp_idf_hal::delay::TickType;
 use esp_idf_hal::gpio::{Gpio0, InputPin, OutputPin};

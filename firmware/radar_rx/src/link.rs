@@ -10,10 +10,26 @@
 //!      deterministic and the calibration host can read it back.
 //!   3. Last resort: RADAR-RX1.
 //!
-//! This inference assumes the fixed physical layout of the head: the only
-//! PSRAM-equipped board among the three is the ESP32-CAM (RADAR-RX2). The
-//! boards are permanently mounted, so the role is effectively immutable after
-//! the first boot.
+//! This inference assumes the fixed physical layout of the head, one rigid
+//! three-board assembly: the only PSRAM-equipped board among the three is the
+//! ESP32-CAM (RADAR-RX2). Board side is not load-bearing — RX1 is the DevKit
+//! (rotated 180° on the left of the middle) and RX2 the CAM (rotated 180° on
+//! the right), but each board resolves its own role at boot. The boards are
+//! permanently mounted, so the role is effectively immutable after the first
+//! boot.
+//!
+//! Wired data plane (`main.rs`): the GPIO matrix routes each board's UART1 to
+//! the pins on the edge facing the middle, so the crossed links are short,
+//! parallel jumpers across the board gaps:
+//!
+//! ```text
+//!   RX1 (LEFT DevKit, 180°): UART1 GPIO17 TX / GPIO16 RX  ←→  middle GPIO16 / GPIO17
+//!   RX2 (CAM, 180°):         UART1 IO15  TX / IO13  RX    ←→  middle GPIO22 / GPIO23
+//! ```
+//!
+//! Power: the middle's 3V3 feeds both neighbours; all three boards share a
+//! common GND; the CAM's GPIO5 (D5) ties to GND as the board's power-return
+//! sink (driven output-low in `main.rs`).
 
 use radar_protocol::node;
 use radar_storage::nvs::Nvs;

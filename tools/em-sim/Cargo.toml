@@ -1,0 +1,17 @@
+[package]
+name = "em-sim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Basic EM/link-budget simulator for the wired UART data plane: quantifies per-link bit/frame error from crosstalk + RF pickup + thermal noise, and the maximum sustainable polling (report/snapshot) rates at the configured baud."
+
+# Standalone workspace: lives OUTSIDE the repository workspace so it builds
+# with the host debug profile without touching the workspace-root
+# [profile.release] that is load-bearing for the firmware (see
+# tools/integration for the same pattern). `cargo build` from inside this
+# directory uses `tools/em-sim/target/`, not the firmware's `C:/rt`.
+[workspace]
+
+[dependencies]
+radar_protocol = { path = "../../crates/radar_protocol" }
+radar_transport = { path = "../../crates/radar_transport" }

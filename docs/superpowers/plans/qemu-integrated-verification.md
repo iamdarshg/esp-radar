@@ -15,13 +15,14 @@ connected yet** (photo is of the bare mounted head):
 
 | Position | Board | Labels | Role in firmware |
 |----------|-------|--------|------------------|
-| LEFT | ESP32-CAM (silver shield, camera connector) | IO0–IO10, 3V3, GND, VIN | RADAR-RX2 (PSRAM → RX2) |
-| MIDDLE | ESP32 DevKit (micro-USB, "ESP32") | 3V3, GND, VIN, GPIO14/15 | RADAR-TX |
-| RIGHT | ESP32 DevKit | 3V3, GND | RADAR-RX1 (no PSRAM → RX1) |
+| LEFT | ESP32 DevKit (rotated 180°) | 3V3, GND, GPIO16/17 | RADAR-RX1 (no PSRAM → RX1) |
+| MIDDLE | ESP32 DevKit (micro-USB, "ESP32") | 3V3, GND, GPIO16/17, GPIO22/23 | RADAR-TX |
+| RIGHT | ESP32-CAM (silver shield, camera connector, rotated 180°) | IO13 RX / IO15 TX, 3V3, GND | RADAR-RX2 (PSRAM → RX2) |
 
-Inter-chip comms are WiFi only (RATE-1/2/3 per `docs/architecture.md`). The
-QEMU harness must map the physical layout onto machines: RX2 on the PSRAM
-machine, RX1/TX on non-PSRAM machines — role resolution is provable at boot.
+The data plane is wired UART (RATE-2/3, CAL per `docs/flashing.md`); the
+measurement plane (RATE-1 broadcast) is WiFi. The QEMU harness must map the
+physical layout onto machines: RX2 on the PSRAM machine, RX1/TX on non-PSRAM
+machines — role resolution is provable at boot.
 
 ## Global constraints (binding — copy into every brief)
 

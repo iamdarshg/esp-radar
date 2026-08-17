@@ -21,7 +21,7 @@ feature.
 | `radar_storage` | NVS persistence: `RadarConfig` (channel, rate, report period, pair tolerance, TX power, node role, antenna offsets) and the calibration artifacts. Namespace `"radar"`. |
 | `radar_web` | The dashboard server: HTTP (`/`, `/app.js`, `/status`) + WebSocket (`/ws`) binary telemetry, and the telemetry wire format (`"RTM1"`, kinds STATUS/WATERFALL/SPECTROGRAM). Serves the embedded dashboard files from `static/`. |
 | `radar_ota` | Partition-aware firmware update: `OtaWriter` (begin/write/finish/abort), `mark_app_valid`, running/last-invalid partition labels. |
-| `radar_rp2350` | Optional wired RP2350 coprocessor link. **Suspended**: its pins (UART2/GPIO16-17) are now the wired data-plane link to RADAR-RX2 (ESP32-CAM). Module stays compiled (`#[allow(dead_code)]`) for a future build that gives the coprocessor its own pins. |
+| `radar_rp2350` | Optional wired RP2350 coprocessor link. **Suspended**: its former pins (UART1/GPIO16-17, UART2) are now the wired data-plane links to RADAR-RX1 and RADAR-RX2. Module stays compiled (`#[allow(dead_code)]`) for a future build that gives the coprocessor its own pins. |
 
 ## RADAR-TX boot flow (`firmware/radar_tx/src/main.rs`)
 
@@ -33,7 +33,7 @@ link_patches + logger
   └ set_tx_power()                 commissioned power, else DEFAULT_TX_POWER_DBM
   └ Dashboard::start()             HTTP :80 + WS /ws, /status snapshot shared state
   └ httpd::register()              add /cal and /ota endpoints
-  └ open wired links               UART1 GPIO18/19 → RADAR-RX1, UART2 GPIO17/16 → RADAR-RX2
+  └ open wired links               UART1 GPIO17/16 → RADAR-RX1, UART2 GPIO23/22 → RADAR-RX2
   └ spawn threads:
       traffic   → broadcast one DataFrame per seq at config.tx_rate_hz (WiFi measurement plane)
       fusion    → poll both wired links, pair RX1/RX2, fuse, classify, broadcast telemetry,
@@ -54,7 +54,9 @@ link_patches + logger
   └ connect_sta()                   associate with AP "ESP32-RADAR" on the radar
                                     channel; returns AP BSSID for CSI MAC filtering
   └ start_csi()                     CSI callback → leaked CsiRing (128 slots)
-  └ open wired link                 role match: RX1 UART1 GPIO18/19, RX2 (CAM) UART1 GPIO14/13
+  └ open wired link                 role match: RX1 UART1 GPIO17/16, RX2 (CAM) UART1 IO15/13
+                                    (GPIO matrix routes each board's UART1 to the pins on the
+                                    edge facing the middle — short parallel jumpers)
   └ spawn radar task                drain ring, DSP pipeline, feature reports + CSI
                                     snapshots + CAL_RESP up the wired link, CAL_CMD
                                     down it
@@ -79,10 +81,10 @@ The inter-board data plane is wired; only the measurement plane is WiFi:
         │  emit reports keyed by the shared sequence number
         │
  RATE-2 (per report window)               — wired UART
-   RADAR-RX1 ── UART1 GPIO18 ──> RADAR-TX GPIO19
-   RADAR-RX2 ── UART1 GPIO14 ──> RADAR-TX GPIO16   (FeatureReport, every
-                                                    report_every frames, default
-                                                    20 → ~10 Hz)
+   RADAR-RX1 ── UART1 GPIO17 ──> RADAR-TX GPIO16
+   RADAR-RX2 ── UART1 IO15 ──> RADAR-TX GPIO22    (FeatureReport, every
+                                                   report_every frames, default
+                                                   20 → ~10 Hz)
 
  RATE-3 (low rate)                        — wired UART
    RADAR-RX1/2 ── CsiSnapshot ──> RADAR-TX           (~2 Hz, raw-ish amplitude
@@ -90,7 +92,7 @@ The inter-board data plane is wired; only the measurement plane is WiFi:
                                                     spectrogram)
 
  Calibration                              — wired UART (both directions)
-   RADAR-TX ── GPIO18/17 ──> RX1/RX2      CAL_CMD (down)
+   RADAR-TX ── GPIO17/23 ──> RX1/RX2      CAL_CMD (down)
    RADAR-RX1/2 ── ... ──> RADAR-TX        CAL_RESP (up)
 
    RADAR-TX fusion:

@@ -51,8 +51,9 @@ trap 'rm -f "$NOTES"' EXIT
 cat > "$NOTES" <<'EOF'
 ## v1 — flash-ready binaries
 
-The three ESP32 boards (LEFT ESP32-CAM → RADAR-RX2, MIDDLE DevKit → RADAR-TX,
-RIGHT DevKit → RADAR-RX1) run the apps below. The measurement plane is WiFi
+The three ESP32 boards (LEFT DevKit, rotated 180° → RADAR-RX1, MIDDLE DevKit
+→ RADAR-TX, RIGHT ESP32-CAM, rotated 180° → RADAR-RX2) run the apps below.
+The measurement plane is WiFi
 (RATE-1 broadcast — the CSI stimulus); the data plane is **wired UART**
 (RATE-2 FeatureReports, CSI snapshots, CAL_CMD/CAL_RESP), so the RX boards
 never transmit on the 2.4 GHz sensing band. The boards form one rigid, fixed

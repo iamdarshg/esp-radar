@@ -111,13 +111,18 @@ fn main() -> anyhow::Result<()> {
 
     // -- wired data plane ------------------------------------------------------
     // The two RX boards report over crossed UART links instead of WiFi, so
-    // they never transmit on the 2.4 GHz sensing band:
-    //   UART1 GPIO18 TX / GPIO19 RX  ←→  RADAR-RX1 (right DevKit) GPIO19/18
-    //   UART2 GPIO17 TX / GPIO16 RX  ←→  RADAR-RX2 (CAM)         IO13 / IO14
-    // (UART2/GPIO16-17 were the RP2350 coprocessor pins; that task is parked
-    // in `cp.rs` for future use.)
-    let link1 = wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio18, peripherals.pins.gpio19)?;
-    let link2 = wired::WiredLink::open(peripherals.uart2, peripherals.pins.gpio17, peripherals.pins.gpio16)?;
+    // they never transmit on the 2.4 GHz sensing band. The GPIO matrix lets us
+    // route each UART to the pins on the board edge facing its neighbour, so
+    // the links are short, parallel jumpers across the board gaps:
+    //   UART1 GPIO17 TX / GPIO16 RX  ←→  RADAR-RX1 (LEFT DevKit, 180°-rotated,
+    //                                   crosses to its GPIO16 RX / GPIO17 TX)
+    //   UART2 GPIO23 TX / GPIO22 RX  ←→  RADAR-RX2 (CAM, 180°-rotated, crosses
+    //                                   to its IO13 RX / IO15 TX)
+    // (GPIO16-17 were the RP2350 coprocessor pins; that task is parked in
+    // `cp.rs` for future use. Power comes from this board: 3V3 shared to both
+    // neighbours, common GND rail, and the CAM's D5 ties to GND as its return.)
+    let link1 = wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio17, peripherals.pins.gpio16)?;
+    let link2 = wired::WiredLink::open(peripherals.uart2, peripherals.pins.gpio23, peripherals.pins.gpio22)?;
 
     // -- tasks ----------------------------------------------------------------
     // The traffic closure is `move`, so it would swallow the `tx_power` /

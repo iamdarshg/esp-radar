@@ -35,23 +35,48 @@ For serial flashing, the release pipeline also produces **merged flash images**
 bootloader + partition table + app in one file) that `esptool` writes in a
 single shot; see "Serial flashing" below.
 
+## Physical layout
+
+One rigid three-board RF head (as in the reference photo, this is final —
+do not re-place the boards):
+
+```text
+[ LEFT DevKit, rotated 180° ]  [ MIDDLE DevKit ]  [ RIGHT ESP32-CAM, rotated 180° ]
+         = RADAR-RX1               = RADAR-TX               = RADAR-RX2
+```
+
+The middle board is the hub: it broadcasts the 2.4 GHz measurement plane,
+hosts the dashboard AP, and is the **only** board connected to power. Both
+neighbours are rotated 180° so their link pins sit on the edge facing the
+middle, keeping the two data-plane jumpers short.
+
 ## Normal-operation wiring (the data plane)
 
 During normal radar operation the three boards are wired together with two
-crossed UART links plus one shared ground rail. These wires are **permanent**
-— unlike the temporary programming hookup used to flash the ESP32-CAM (next
-sections).
+crossed UART links plus one shared power/ground rail. These wires are
+**permanent** — unlike the temporary programming hookup used to flash the
+ESP32-CAM (next sections). The ESP32's GPIO matrix routes each UART to
+whatever pins are on the board edge facing its neighbour, so the link pins
+below are a free choice — chosen to be the short parallel jumpers across the
+board gaps.
 
 ```text
-LINK 1 — RADAR-TX (middle) UART1  ↔  RADAR-RX1 (DevKit) UART1
-  middle GPIO18 (TX1)  ──→  rx1 GPIO19 (RX1)     [TX→RX]
-  middle GPIO19 (RX1)  ←──  rx1 GPIO18 (TX1)     [RX←TX]
+LINK 1 — RADAR-TX (middle) UART1  ↔  RADAR-RX1 (LEFT DevKit, 180°) UART1
+  middle GPIO17 (TX1)  ──→  rx1 GPIO16 (RX1)     [TX→RX]
+  middle GPIO16 (RX1)  ←──  rx1 GPIO17 (TX1)     [RX←TX]
+  (both boards route UART1 to GPIO17 TX / GPIO16 RX — the crossed pair)
 
-LINK 2 — RADAR-TX (middle) UART2  ↔  RADAR-RX2 (ESP32-CAM) UART1
-  middle GPIO17 (TX2)  ──→  cam IO13 (RX1)       [TX→RX]
-  middle GPIO16 (RX2)  ←──  cam IO14 (TX1)       [RX←TX]
+LINK 2 — RADAR-TX (middle) UART2  ↔  RADAR-RX2 (RIGHT CAM, 180°) UART1
+  middle GPIO23 (TX2)  ──→  cam IO13 (RX1)       [TX→RX]
+  middle GPIO22 (RX2)  ←──  cam IO15 (TX1)       [RX←TX]
+  (the CAM's UART1 TX is remapped IO14→IO15; IO15 is the TDO strap, whose
+   level only selects ROM console output — driving it as UART TX is boot-safe)
 
-GND — all three board GND pins tied to one rail (common reference)
+POWER — the middle's 3V3 feeds both neighbours (shared rail). All three board
+        GND pins tie to one rail (common reference). The CAM's GPIO5 (D5) ties
+        to GND as the board's power-return sink — the firmware drives it
+        output-low so it holds the return path instead of the SDIO strap
+        pull-up floating it high.
 ```
 
 Notes:
@@ -67,9 +92,14 @@ Notes:
   shared rail, so all three boards must share one ground reference. UART RX
   pins have internal pull-ups (idle-high), so an unplugged wire reads as a
   defined level, never a floating input.
-* The CAM's UART1 pins are IO14 (TX) and IO13 (RX) — the middle DevKit's UART2
-  (GPIO17 TX / GPIO16 RX) crosses onto them. RX1's pins mirror the middle's
-  UART1 (GPIO18/19).
+* **Pins are a free choice.** The ESP32 GPIO matrix routes any UART to any
+  GPIO (`uart_set_pin`), so each link uses the pins on the board edge facing
+  its neighbour — the jumpers are as short and parallel as the fixed board
+  layout allows. LINK 1 crosses the middle's UART1 (GPIO17 TX / GPIO16 RX)
+  onto RX1's mirrored UART1 pins (both boards: GPIO17 TX, GPIO16 RX). LINK 2
+  crosses the middle's UART2 (GPIO23 TX / GPIO22 RX) onto the CAM's UART1
+  (IO13 RX / IO15 TX). The CAM's IO15 is the TDO strap — its level only
+  selects the ROM console output, so UART TX on it is boot-safe.
 * The CAM-programming hookup (next section) uses the middle DevKit's **UART0**
   (GPIO1/3); the data plane uses UART1/UART2, so the two wiring schemes share
   no pin and can coexist — you can leave the data-plane wiring in place while
@@ -86,7 +116,7 @@ programmed with `esptool`:
 # RADAR-TX (middle DevKit) — OTA-capable table (factory + ota_0 + ota_1)
 esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_tx_merged.bin
 
-# RADAR-RX1 (right DevKit) — default single-app table
+# RADAR-RX1 (left DevKit) — default single-app table
 esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_rx_merged.bin
 ```
 
@@ -169,8 +199,9 @@ programmer RX ← target TX
 
 These programming wires (UART0 / GPIO0 / EN) are removed after flashing and
 are **not** required during normal operation. The CAM's **data-plane** wiring
-from the previous section (IO13/IO14 ↔ middle GPIO16/17) is permanent and
-independent — the temporary hookup only touches the middle DevKit's UART0.
+from the previous section (IO13 RX / IO15 TX ↔ middle GPIO23 TX / GPIO22 RX)
+is permanent and independent — the temporary hookup only touches the middle
+DevKit's UART0.
 
 Flashing `RADAR-RX2` is otherwise identical to the DevKit flash: the same
 `radar_rx` firmware (it is the *same binary* as RX1 — the node role is resolved
@@ -204,8 +235,8 @@ image and can roll back.
 | Board | Firmware source | App | Method |
 |-------|-----------------|-----|--------|
 | RADAR-TX (middle DevKit) | `firmware/radar_tx` | `radar_tx` | USB-UART serial, then OTA |
-| RADAR-RX1 (right DevKit) | `firmware/radar_rx` | `radar_rx` | USB-UART serial |
-| RADAR-RX2 (ESP32-CAM, left) | `firmware/radar_rx` | `radar_rx` | middle DevKit as UART adapter |
+| RADAR-RX1 (left DevKit, rotated 180°) | `firmware/radar_rx` | `radar_rx` | USB-UART serial |
+| RADAR-RX2 (ESP32-CAM, right, rotated 180°) | `firmware/radar_rx` | `radar_rx` | middle DevKit as UART adapter |
 
 > The merged images (`.scratch/flash/*.bin`) are built in TX-then-RX order, so
 > the embedded bootloader reflects the **last** `esp-idf-sys` build (currently

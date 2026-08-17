@@ -9,7 +9,16 @@ occupancy/motion estimate served over its own Wi-Fi AP.
 
 The three boards are mounted **once** on breadboards as one assembly and never
 move. See the supplied photograph (`IMG_9F899C38-89DF-446E-BFB1-46FE287B91C3.jpeg`)
-— it defines the hardware topology.
+— it defines the hardware topology. Canonical layout (fixed):
+
+```text
+[ LEFT DevKit, rotated 180° ]  [ MIDDLE DevKit ]  [ RIGHT ESP32-CAM, rotated 180° ]
+         = RADAR-RX1               = RADAR-TX               = RADAR-RX2
+```
+
+The middle board powers the whole head (its 3V3 feeds both neighbours on a
+shared rail, common GND, CAM D5→GND return sink) and is the hub for both the
+WiFi measurement plane and the wired UART data plane.
 
 ## The physical constraint — DO NOT MOVE THESE BOARDS
 
@@ -38,8 +47,8 @@ move. See the supplied photograph (`IMG_9F899C38-89DF-446E-BFB1-46FE287B91C3.jpe
 | Node | Hardware | Role | Responsibilities |
 |------|----------|------|-----------------|
 | **RADAR-TX** | Middle ESP32 DevKit | AP + fusion + dashboard host + calibration host + OTA host | Generates the 2.4 GHz measurement traffic, owns the global packet sequence number, coordinates the radar session, receives processed features from RX1 and RX2 over the wired UART data plane, fuses them, and serves the standalone web dashboard, `/cal` and `/ota` endpoints. (The optional RP2350 coprocessor task is parked — its pins are the RX2 link.) |
-| **RADAR-RX1** | Right ESP32 DevKit | CSI capture + DSP | Receives TX measurement frames, captures CSI, runs the DSP/PCA/STFT pipeline, and reports compact high-rate features to TX over a wired UART link. |
-| **RADAR-RX2** | ESP32-CAM (left) | CSI capture + DSP (same firmware as RX1) | Captures a second, spatially/diversely-placed CSI observation of the *same* TX packets and reports the same features over its own wired UART link. Runs the identical `radar_rx` firmware; the node role is resolved at boot (NVS, else PSRAM presence — only the ESP32-CAM has PSRAM). Carries a microSD slot; SD recording is currently deferred in the code. |
+| **RADAR-RX1** | Left ESP32 DevKit (rotated 180°) | CSI capture + DSP | Receives TX measurement frames, captures CSI, runs the DSP/PCA/STFT pipeline, and reports compact high-rate features to TX over a wired UART link. |
+| **RADAR-RX2** | ESP32-CAM (right, rotated 180°) | CSI capture + DSP (same firmware as RX1) | Captures a second, spatially/diversely-placed CSI observation of the *same* TX packets and reports the same features over its own wired UART link. Runs the identical `radar_rx` firmware; the node role is resolved at boot (NVS, else PSRAM presence — only the ESP32-CAM has PSRAM). Carries a microSD slot; SD recording is currently deferred in the code. |
 
 RX1 and RX2 are **independent, non-coherent** observations of the same
 transmitted packets. They are paired by TX packet sequence number, never by RF

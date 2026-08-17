@@ -18,6 +18,7 @@
 //!   5. Spawn the measurement/DSP/calibration loop (`radar::run`) and sleep
 //!      forever — the leaked `EspWifi` and `CsiRing` must outlive `main`.
 
+use esp_idf_hal::gpio::PinDriver;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
@@ -76,16 +77,26 @@ fn main() -> anyhow::Result<()> {
 
     // -- wired data plane -----------------------------------------------------
     // Reports/CAL/snapshots go over UART, not WiFi, so this board stops
-    // transmitting on the 2.4 GHz sensing band. The role match gives each
-    // board its crossed-pair pins (the other arm's pins are never moved):
-    //   RX1 (DevKit): UART1 GPIO18 TX / GPIO19 RX  ←→  middle GPIO19 / GPIO18
-    //   RX2 (CAM):    UART1 GPIO14 TX / GPIO13 RX  ←→  middle GPIO16 / GPIO17
+    // transmitting on the 2.4 GHz sensing band. The GPIO matrix routes each
+    // board's UART1 to the pins on the edge facing the middle, so the links are
+    // short, parallel jumpers across the gaps. The role match gives each board
+    // its crossed-pair pins (the other arm's pins are never moved):
+    //   RX1 (LEFT DevKit, 180°-rotated): UART1 GPIO17 TX / GPIO16 RX  ←→  middle GPIO16 / GPIO17
+    //   RX2 (CAM, 180°-rotated):          UART1 IO15 TX / IO13 RX     ←→  middle GPIO22 / GPIO23
+    // (IO15 is the TDO strap — its level only selects ROM console output, so
+    // driving it as UART TX is boot-safe.)
     let wired = match node_id {
         n if n == node::RX1 => {
-            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio18, peripherals.pins.gpio19)?
+            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio17, peripherals.pins.gpio16)?
         }
         n if n == node::RX2 => {
-            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio14, peripherals.pins.gpio13)?
+            // GPIO5 (D5) is the CAM's power-return path: it is tied to the
+            // shared GND rail and sinks the board's supply return. Drive it
+            // output-low so the firmware actively holds that line instead of
+            // leaving the SDIO strap pull-up to float it high.
+            let mut d5 = PinDriver::output(peripherals.pins.gpio5)?;
+            d5.set_low()?;
+            wired::WiredLink::open(peripherals.uart1, peripherals.pins.gpio15, peripherals.pins.gpio13)?
         }
         _ => unreachable!("rx_link_for guaranteed a receiver role"),
     };
