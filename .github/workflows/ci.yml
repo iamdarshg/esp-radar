@@ -12,6 +12,13 @@ env:
   # Espressif `esp` nightly-fork toolchain + ESP-IDF and build host-only on the
   # dev machine (docs/verification.md). All `device`-featured code in the
   # crates below is off by default, so they compile and test on a plain host.
+  #
+  # Toolchain: pinned to `nightly-2026-07-15` (matches the dev machine's
+  # default nightly, rustc d0babd8b6 2026-07-15). NOT stable — the workspace
+  # root Cargo.toml uses `cargo-features = ["panic-immediate-abort"]` (and
+  # `panic = "immediate-abort"` in [profile.release]), which is still
+  # nightly-gated and REQUIRED by the ESP-IDF firmware release profile
+  # (stable rejects the manifest outright).
   HOST_CRATES: >-
     radar_protocol radar_dsp radar_features radar_calibration
     radar_transport radar_csi radar_storage radar_web radar_ota radar_rp2350
@@ -37,7 +44,7 @@ jobs:
           - radar_rp2350
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
       - uses: Swatinem/rust-cache@v2
       - name: Build & test ${{ matrix.crate }}
         run: cargo test -p ${{ matrix.crate }} --locked
@@ -50,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/integration
@@ -65,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly-2026-07-15
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
