@@ -90,18 +90,19 @@ this project or its binaries.
 EOF
 
 echo "==> Creating/updating release $TAG"
-ASSET_ARGS=()
+# `gh release create` takes assets as positional args (no --attach flag).
+FILES=()
 for a in "${ASSETS[@]}"; do
-  ASSET_ARGS+=("--attach" "$FLASH_DIR/$a")
+  FILES+=("$FLASH_DIR/$a")
 done
 
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "    release $TAG already exists — updating"
   gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES" \
-    "${ASSET_ARGS[@]}" >/dev/null
+    "${FILES[@]}" >/dev/null
 else
   gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES" \
-    "${ASSET_ARGS[@]}"
+    "${FILES[@]}"
 fi
 
 echo "==> Done: $(gh release view "$TAG" --json url -q .url)"
