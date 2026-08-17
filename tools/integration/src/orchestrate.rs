@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::common::{get_str, get_u64, parse_summary, Config, Role, REPORT_EVERY};
@@ -15,6 +16,10 @@ struct ChildHandle {
     role: Role,
     child: Child,
     stdout: Arc<Mutex<Vec<String>>>,
+    /// Detached stdout-drain thread; joined before the buffers are scanned so
+    /// every line (including the final SUMMARY line) is present. `Option` so the
+    /// handle can be `take()`n out (join consumes it).
+    reader: Option<JoinHandle<()>>,
 }
 
 const READY_TIMEOUT: Duration = Duration::from_secs(6);
@@ -51,7 +56,7 @@ pub fn run(cfg: &Config) -> std::process::ExitCode {
                 let lines = stdout.clone();
                 let role_str = role.as_str().to_string();
                 let stdout_pipe = child.stdout.take().expect("piped stdout");
-                std::thread::spawn(move || {
+                let reader = std::thread::spawn(move || {
                     let reader = BufReader::new(stdout_pipe);
                     for line in reader.lines() {
                         if let Ok(line) = line {
@@ -61,7 +66,7 @@ pub fn run(cfg: &Config) -> std::process::ExitCode {
                         }
                     }
                 });
-                children.push(ChildHandle { role, child, stdout });
+                children.push(ChildHandle { role, child, stdout, reader: Some(reader) });
                 println!("  spawned {} (pid spawned)", role_str);
             }
             Err(e) => {
@@ -107,6 +112,15 @@ pub fn run(cfg: &Config) -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // All children have exited, so their stdout pipes are closed and each
+    // reader thread has drained EOF. Join them so the final SUMMARY line is
+    // guaranteed to be in the buffer before we scan for it.
+    for h in children.iter_mut() {
+        if let Some(reader) = h.reader.take() {
+            let _ = reader.join();
+        }
     }
 
     // Collect each role's SUMMARY line.
@@ -209,6 +223,8 @@ fn run_assertions(
     let rx2_total = get_u64(rx2, "total");
     let rx1_resyncs = get_u64(rx1, "resyncs");
     let rx2_resyncs = get_u64(rx2, "resyncs");
+    let rx1_gaps = get_u64(rx1, "gaps");
+    let rx2_gaps = get_u64(rx2, "gaps");
 
     let reports_rx1 = get_u64(tx, "reports_rx1");
     let reports_rx2 = get_u64(tx, "reports_rx2");
@@ -267,6 +283,11 @@ fn run_assertions(
         "RATE-1: no out-of-order / resync (rx2)".into(),
         rx2_resyncs == 0,
         format!("resyncs={rx2_resyncs}"),
+    ));
+    out.push((
+        "RATE-1: zero seq gaps (rx1+rx2)".into(),
+        rx1_gaps == 0 && rx2_gaps == 0,
+        format!("gaps: rx1={rx1_gaps}, rx2={rx2_gaps}"),
     ));
 
     let expected_reports = 2u64 * (frames_sent / REPORT_EVERY as u64);

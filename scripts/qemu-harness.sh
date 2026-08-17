@@ -107,6 +107,9 @@ prepare_image() {
 [ -f "$QEMU_BIN" ] || die "qemu not found at $QEMU_BIN"
 [ -f "$TX_IMG_SRC" ]  || die "TX image missing: $TX_IMG_SRC (run Task 4 first)"
 [ -f "$RX1_IMG_SRC" ] || die "RX1 image missing: $RX1_IMG_SRC (run Task 4 first)"
+[ -f "$BOOTLOADER" ]  || die "bootloader missing: $BOOTLOADER"
+[ -f "$SCRATCH/qemu_partition-table.bin" ] || die "partition table missing: $SCRATCH/qemu_partition-table.bin (run Task 4 first)"
+[ -f "$SCRATCH/radar_rx.bin" ] || die "RX app image missing: $SCRATCH/radar_rx.bin (run Task 4 first)"
 
 # ---- RX2 image provisioning (regenerate only if missing) --------------------
 if [ ! -f "$RX2_IMG" ]; then

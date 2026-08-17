@@ -5,8 +5,9 @@ How to get firmware onto the three boards, and how to update it afterwards.
 There are two distinct paths:
 
 * **Serial flashing** — for the initial programming of all three boards and for
-  any recovery. Uses the standard ESP-IDF-Rust flash tool (`espflash`) against
-  the ELF produced by the cargo build.
+  any recovery. Programs a **merged flash image** (bootloader + partition table
+  + app in one file) with `esptool write_flash`; `espflash` may also work if
+  installed.
 * **Over-the-air (OTA)** — for `RADAR-TX` after it is running. Upload a new
   firmware image through the web dashboard at `http://192.168.4.1/ota`. No
   serial cable needed.
@@ -57,7 +58,7 @@ esptool --chip esp32 --port <COM> write_flash 0x0 .scratch/flash/radar_rx_merged
   bootloader@0x1000, the explicitly generated partition table@0x8000 and the
   app (0x10000 or 0x20000) into a single image written at offset 0x0 — a blank
   chip boots straight off one write.
-* `esptool` (esptool.py v4.7.0) is on the Python 3.12 Scripts `PATH` once
+* `esptool` (esptool.py v4.12.0) is on the Python 3.12 Scripts `PATH` once
   `firmware/esp-env.sh` is sourced. `espflash` is **not installed** in this
   build environment; if it is installed later it can flash the ELF directly
   instead (`espflash flash --monitor C:/rt/xtensa-esp32-espidf/release/radar_tx`),
@@ -161,3 +162,9 @@ image and can roll back.
 | RADAR-TX (left DevKit) | `firmware/radar_tx` | `radar_tx` | USB-UART serial, then OTA |
 | RADAR-RX1 (middle DevKit) | `firmware/radar_rx` | `radar_rx` | USB-UART serial |
 | RADAR-RX2 (ESP32-CAM) | `firmware/radar_rx` | `radar_rx` | middle DevKit as UART adapter |
+
+> The merged images (`.scratch/flash/*.bin`) are built in TX-then-RX order, so
+> the embedded bootloader reflects the **last** `esp-idf-sys` build (currently
+> radar_rx's SPIRAM-enabled one). If the build order ever changes, re-run the
+> merge so the images carry a consistent bootloader, and confirm each board
+> boots to its expected milestone.
