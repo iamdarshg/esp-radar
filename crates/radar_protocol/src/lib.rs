@@ -96,18 +96,18 @@ pub const MAX_PCA: usize = 8;
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FeatureReport {
-    pub seq: u32,             // last TX seq this report covers
-    pub n_frames: u32,        // frames processed inside the window
-    pub n_missing: u32,       // expected-but-unavailable frames in the window
-    pub rssi: i16,            // dBm
-    pub snr: i8,              // dB
-    pub csi_quality: u8,      // 0..100
-    pub sat_score: u8,        // 0..100, higher = more clipped/saturated
-    pub dyn_range: u8,        // 0..100
+    pub seq: u32,        // last TX seq this report covers
+    pub n_frames: u32,   // frames processed inside the window
+    pub n_missing: u32,  // expected-but-unavailable frames in the window
+    pub rssi: i16,       // dBm
+    pub snr: i8,         // dB
+    pub csi_quality: u8, // 0..100
+    pub sat_score: u8,   // 0..100, higher = more clipped/saturated
+    pub dyn_range: u8,   // 0..100
     pub flags: u8,
-    pub amp_mean: f32,        // mean amplitude across active subcarriers
+    pub amp_mean: f32, // mean amplitude across active subcarriers
     pub amp_std: f32,
-    pub motion_energy: f32,   // energy in the human-motion band, windowed
+    pub motion_energy: f32,    // energy in the human-motion band, windowed
     pub spectral_entropy: f32, // 0..1, higher = more broadband
     pub dominant_freq_hz: f32,
     pub phase_dispersion: f32, // circular std of sanitized phase
@@ -204,8 +204,8 @@ pub mod cal_action {
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CalCmd {
-    pub stage: u8,        // cal_stage::*
-    pub action: u8,       // cal_action::*
+    pub stage: u8,  // cal_stage::*
+    pub action: u8, // cal_action::*
     pub collect_ms: u32,
     pub tx_power_db: i16, // proposed TX power (RF power sweep)
 }
@@ -262,7 +262,8 @@ pub fn build(dst: &mut [u8], hdr: &Header, payload: &[u8]) -> usize {
     h.payload_len = payload.len() as u16;
     // Copy header with crc16 zeroed, then compute CRC over header + payload.
     unsafe {
-        let src_bytes = core::slice::from_raw_parts((&h as *const Header) as *const u8, HEADER_SIZE);
+        let src_bytes =
+            core::slice::from_raw_parts((&h as *const Header) as *const u8, HEADER_SIZE);
         dst[..HEADER_SIZE].copy_from_slice(src_bytes);
     }
     dst[HEADER_SIZE..total].copy_from_slice(payload);
@@ -373,7 +374,14 @@ mod tests {
                 core::mem::size_of::<CsiSnapshot>(),
             )
         };
-        let hdr = Header::new(frame_type::CSI_SNAPSHOT, node::RX2, node::TX, 1234, 99, payload.len() as u16);
+        let hdr = Header::new(
+            frame_type::CSI_SNAPSHOT,
+            node::RX2,
+            node::TX,
+            1234,
+            99,
+            payload.len() as u16,
+        );
         let mut buf = [0u8; 1024];
         let n = build(&mut buf, &hdr, payload);
         assert!(n > 0);
@@ -426,7 +434,14 @@ mod tests {
                 core::mem::size_of::<FeatureReport>(),
             )
         };
-        let hdr = Header::new(frame_type::FEATURE_REPORT, node::RX1, node::TX, 42, 123456789, payload.len() as u16);
+        let hdr = Header::new(
+            frame_type::FEATURE_REPORT,
+            node::RX1,
+            node::TX,
+            42,
+            123456789,
+            payload.len() as u16,
+        );
         let n = build(&mut buf, &hdr, payload);
         assert!(n > 0);
 

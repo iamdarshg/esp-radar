@@ -9,7 +9,7 @@
 //! One namespace `radar` holds every artifact. NVS keys are limited to
 //! 15 characters; ours are all shorter.
 
-use core::ffi::{CStr, c_void};
+use core::ffi::{c_void, CStr};
 use esp_idf_sys as sys;
 use radar_calibration::{BaselineStats, ClassThresholds, TxPowerModel};
 
@@ -173,10 +173,19 @@ impl Nvs {
 
     /// Read a fixed-size blob. Two-phase: query the stored length with a null
     /// out-pointer first (NVS requires this to learn the true size), then read.
-    fn get_blob_const<const N: usize>(&self, key: &CStr, out: &mut [u8; N]) -> Result<(), NvsError> {
+    fn get_blob_const<const N: usize>(
+        &self,
+        key: &CStr,
+        out: &mut [u8; N],
+    ) -> Result<(), NvsError> {
         let mut len: usize = 0;
         let rc = unsafe {
-            sys::nvs_get_blob(self.handle, key.as_ptr(), core::ptr::null_mut(), &mut len as *mut _)
+            sys::nvs_get_blob(
+                self.handle,
+                key.as_ptr(),
+                core::ptr::null_mut(),
+                &mut len as *mut _,
+            )
         };
         if rc == sys::ESP_ERR_NVS_NOT_FOUND {
             return Err(NvsError::NotFound);
@@ -185,7 +194,10 @@ impl Nvs {
             return Err(NvsError::Io(rc));
         }
         if len != N {
-            return Err(NvsError::SizeMismatch { expected: N, actual: len });
+            return Err(NvsError::SizeMismatch {
+                expected: N,
+                actual: len,
+            });
         }
         let rc = unsafe {
             sys::nvs_get_blob(
@@ -210,7 +222,12 @@ impl Nvs {
             return Err(NvsError::Io(rc));
         }
         let rc = unsafe {
-            sys::nvs_set_blob(self.handle, key.as_ptr(), buf.as_ptr() as *const c_void, buf.len())
+            sys::nvs_set_blob(
+                self.handle,
+                key.as_ptr(),
+                buf.as_ptr() as *const c_void,
+                buf.len(),
+            )
         };
         if rc != sys::ESP_OK {
             return Err(NvsError::Io(rc));

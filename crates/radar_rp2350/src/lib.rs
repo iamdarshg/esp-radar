@@ -25,4 +25,4 @@ pub mod session;
 pub mod link;
 
 pub use framer::{Frame, FrameDecoder, MAX_FRAME};
-pub use session::{Seq, compatible};
+pub use session::{compatible, Seq};

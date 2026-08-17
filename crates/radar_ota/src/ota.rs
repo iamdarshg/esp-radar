@@ -78,7 +78,11 @@ impl OtaWriter {
         if next.is_null() {
             return Err(OtaError::NoOtaPartition);
         }
-        let size = if expected_size == 0 { SEQUENTIAL_WRITES } else { expected_size };
+        let size = if expected_size == 0 {
+            SEQUENTIAL_WRITES
+        } else {
+            expected_size
+        };
         let mut handle: sys::esp_ota_handle_t = 0;
         // SAFETY: `handle` is written by IDF before return; `next` is a valid
         // static partition pointer.
@@ -87,7 +91,11 @@ impl OtaWriter {
         if rc != sys::ESP_OK {
             return Err(OtaError::Begin(rc));
         }
-        Ok(Self { handle, partition: next, written: 0 })
+        Ok(Self {
+            handle,
+            partition: next,
+            written: 0,
+        })
     }
 
     /// Stream the next chunk of the image. Call repeatedly as the upload
@@ -115,7 +123,9 @@ impl OtaWriter {
         // SAFETY: `partition` is a valid static pointer; `label` is a
         // null-terminated inline C string that lives for the program's lifetime.
         let label = unsafe { (*self.partition).label.as_ptr() };
-        unsafe { CStr::from_ptr(label as *const c_char) }.to_str().ok()
+        unsafe { CStr::from_ptr(label as *const c_char) }
+            .to_str()
+            .ok()
     }
 
     /// Validate the written image and switch the boot partition to it.

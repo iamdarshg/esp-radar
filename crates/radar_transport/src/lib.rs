@@ -29,7 +29,7 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use core::fmt;
 
-pub use radar_protocol::{CalResp, CsiSnapshot, FeatureReport, Header, node};
+pub use radar_protocol::{node, CalResp, CsiSnapshot, FeatureReport, Header};
 
 /// UDP port for TX → RX measurement traffic (both RX listen here).
 pub const MEASURE_PORT: u16 = 4444;
@@ -107,28 +107,48 @@ impl SequenceTracker {
             self.initialized = true;
             self.expected = seq.wrapping_add(1);
             self.total += 1;
-            return SeqEvent { seq, jumped: false, gap: 0, resync: false };
+            return SeqEvent {
+                seq,
+                jumped: false,
+                gap: 0,
+                resync: false,
+            };
         }
         let gap = seq.wrapping_sub(self.expected);
         if gap == 0 {
             // In order.
             self.expected = seq.wrapping_add(1);
             self.total += 1;
-            SeqEvent { seq, jumped: false, gap: 0, resync: false }
+            SeqEvent {
+                seq,
+                jumped: false,
+                gap: 0,
+                resync: false,
+            }
         } else if gap > 0x8000_0000 {
             // Observed seq behind expected: stream restart or a very late
             // frame. Treat as resync, not a giant gap.
             self.resyncs += 1;
             self.total += 1;
             self.expected = seq.wrapping_add(1);
-            SeqEvent { seq, jumped: true, gap: 0, resync: true }
+            SeqEvent {
+                seq,
+                jumped: true,
+                gap: 0,
+                resync: true,
+            }
         } else {
             // We skipped `gap` frames.
             self.gaps += 1;
             self.lost += gap as u64;
             self.total += 1 + gap as u64;
             self.expected = seq.wrapping_add(1);
-            SeqEvent { seq, jumped: true, gap, resync: false }
+            SeqEvent {
+                seq,
+                jumped: true,
+                gap,
+                resync: false,
+            }
         }
     }
 
@@ -171,14 +191,18 @@ pub struct WindowCounter {
 
 impl WindowCounter {
     pub fn new(window_us: u64) -> Self {
-        Self { samples: VecDeque::with_capacity(8), window_us, total: 0 }
+        Self {
+            samples: VecDeque::with_capacity(8),
+            window_us,
+            total: 0,
+        }
     }
 
     pub fn push(&mut self, now_us: u64) {
         self.total += 1;
         self.samples.push_back((now_us, self.total));
         let cutoff = now_us.saturating_sub(self.window_us);
-        while self.samples.front().map_or(false, |&(t, _)| t < cutoff) {
+        while self.samples.front().is_some_and(|&(t, _)| t < cutoff) {
             self.samples.pop_front();
         }
     }
@@ -277,7 +301,10 @@ impl Pairer {
         };
         // Insert keeping seq order (reports arrive roughly in order; rare
         // reordering is handled by the linear insert on a small buffer).
-        let pos = q.iter().position(|r| r.seq > stamped.seq).unwrap_or(q.len());
+        let pos = q
+            .iter()
+            .position(|r| r.seq > stamped.seq)
+            .unwrap_or(q.len());
         q.insert(pos, stamped);
         while q.len() > self.max_buf {
             q.pop_front();
@@ -397,7 +424,11 @@ pub fn build_data_frame(
 ) -> usize {
     let payload = radar_protocol::DataPayload {
         tx_power_db,
-        flags: if cal { radar_protocol::data_flags::CAL } else { 0 },
+        flags: if cal {
+            radar_protocol::data_flags::CAL
+        } else {
+            0
+        },
     };
     let pl = unsafe {
         core::slice::from_raw_parts(
@@ -502,7 +533,12 @@ mod tests {
     use super::*;
 
     fn sample_report(seq: u32, energy: f32) -> FeatureReport {
-        FeatureReport { seq, motion_energy: energy, rssi: -55, ..Default::default() }
+        FeatureReport {
+            seq,
+            motion_energy: energy,
+            rssi: -55,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -561,8 +597,16 @@ mod tests {
     fn pairer_pairs_aligned_reports() {
         let mut p = Pairer::new(10);
         for i in 0..5u32 {
-            p.push(node::RX1, sample_report(i * 20, i as f32), (i * 1000) as u64);
-            p.push(node::RX2, sample_report(i * 20, i as f32 * 2.0), (i * 1000) as u64);
+            p.push(
+                node::RX1,
+                sample_report(i * 20, i as f32),
+                (i * 1000) as u64,
+            );
+            p.push(
+                node::RX2,
+                sample_report(i * 20, i as f32 * 2.0),
+                (i * 1000) as u64,
+            );
         }
         let mut pairs = 0;
         while let Some(_) = p.next_pair(1_000_000) {
@@ -579,7 +623,11 @@ mod tests {
         // RX2 reports half a window ahead of RX1.
         for i in 0..4u32 {
             p.push(node::RX1, sample_report(i * 20, 1.0), (i * 1000) as u64);
-            p.push(node::RX2, sample_report(i * 20 + 10, 2.0), (i * 1000) as u64);
+            p.push(
+                node::RX2,
+                sample_report(i * 20 + 10, 2.0),
+                (i * 1000) as u64,
+            );
         }
         let mut pairs = 0;
         while let Some(_) = p.next_pair(1_000_000) {

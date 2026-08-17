@@ -18,19 +18,29 @@ pub struct Biquad {
 
 impl Biquad {
     pub fn new(b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> Self {
-        Self { b0, b1, b2, a1, a2, x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }
+        Self {
+            b0,
+            b1,
+            b2,
+            a1,
+            a2,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
     }
 
     /// Low-pass with normalized cutoff `fc` (0..0.5 of sample rate) and
     /// Butterworth Q (0.7071).
     pub fn lowpass(fc: f32) -> Self {
-        let q = 0.7071_f32;
+        let q = core::f32::consts::FRAC_1_SQRT_2;
         Self::design(1, fc, q)
     }
 
     /// High-pass with normalized cutoff `fc`.
     pub fn highpass(fc: f32) -> Self {
-        let q = 0.7071_f32;
+        let q = core::f32::consts::FRAC_1_SQRT_2;
         Self::design(2, fc, q)
     }
 
@@ -72,14 +82,7 @@ impl Biquad {
             }
             _ => {
                 // Band-pass (constant 0 dB peak gain)
-                (
-                    alpha,
-                    0.0,
-                    -alpha,
-                    1.0 + alpha,
-                    -2.0 * cos_w0,
-                    1.0 - alpha,
-                )
+                (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
             }
         };
 
@@ -98,7 +101,9 @@ impl Biquad {
 
     /// Process one sample.
     pub fn process(&mut self, x: f32) -> f32 {
-        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2 - self.a1 * self.y1 - self.a2 * self.y2;
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
         self.x2 = self.x1;
         self.x1 = x;
         self.y2 = self.y1;
@@ -137,8 +142,8 @@ mod tests {
     #[test]
     fn lowpass_removes_high_frequency() {
         let mut lp = Biquad::lowpass(0.05); // fc = 0.05 * fs (normalized to Nyquist)
-        // Feed DC + a high-frequency tone (0.4 fs). The tone should be
-        // strongly attenuated while the DC path settles to 1.0.
+                                            // Feed DC + a high-frequency tone (0.4 fs). The tone should be
+                                            // strongly attenuated while the DC path settles to 1.0.
         let mut out: Vec<f32> = Vec::new();
         for i in 0..2000 {
             let t = i as f32;
@@ -152,7 +157,8 @@ mod tests {
         assert!((mean - 1.0).abs() < 0.15, "tail mean {mean}");
         // And the residual AC ripple (the attenuated 0.4 fs tone) must be
         // small relative to the DC level.
-        let ripple: f32 = tail.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / tail.len() as f32;
+        let ripple: f32 =
+            tail.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / tail.len() as f32;
         assert!(ripple.sqrt() < 0.1, "ripple rms {}", ripple.sqrt());
     }
 

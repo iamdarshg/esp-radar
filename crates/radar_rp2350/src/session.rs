@@ -28,7 +28,9 @@ impl Seq {
     pub fn new() -> Self {
         Self(1)
     }
-    /// Next sequence number.
+    /// Next sequence number. Named `next` for the session caller, not
+    /// `Iterator::next`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u32 {
         let s = self.0;
         self.0 = self.0.wrapping_add(1);

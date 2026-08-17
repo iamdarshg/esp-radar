@@ -232,6 +232,10 @@ impl WaterfallFrame<'_> {
         11 + self.n_sub as usize * self.bins as usize
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
         let mut w = Writer::new(buf);
         w.put(&TELEMETRY_MAGIC.to_le_bytes())?;
@@ -267,6 +271,10 @@ pub struct SpectrogramFrame<'a> {
 impl SpectrogramFrame<'_> {
     pub fn len(&self) -> usize {
         11 + self.n_freq as usize * self.bins as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
@@ -375,7 +383,10 @@ impl<'a> Writer<'a> {
     fn put(&mut self, bytes: &[u8]) -> Result<(), EncodeError> {
         let end = self.pos + bytes.len();
         if end > self.buf.len() {
-            return Err(EncodeError::TooSmall { need: end, have: self.buf.len() });
+            return Err(EncodeError::TooSmall {
+                need: end,
+                have: self.buf.len(),
+            });
         }
         self.buf[self.pos..end].copy_from_slice(bytes);
         self.pos = end;
@@ -442,7 +453,13 @@ mod tests {
     #[test]
     fn waterfall_roundtrip_len() {
         let data = [0u8; 56 * 32];
-        let wf = WaterfallFrame { link: link::RX1, n_sub: 56, bins: 32, scale: 4, data: &data };
+        let wf = WaterfallFrame {
+            link: link::RX1,
+            n_sub: 56,
+            bins: 32,
+            scale: 4,
+            data: &data,
+        };
         assert_eq!(wf.len(), 11 + 56 * 32);
         let mut buf = [0u8; 4096];
         let n = wf.encode(&mut buf).unwrap();
@@ -456,7 +473,13 @@ mod tests {
     #[test]
     fn spectrogram_roundtrip_len() {
         let data = [7u8; 64 * 20];
-        let sp = SpectrogramFrame { link: link::FUSED, n_freq: 64, bins: 20, scale: 2, data: &data };
+        let sp = SpectrogramFrame {
+            link: link::FUSED,
+            n_freq: 64,
+            bins: 20,
+            scale: 2,
+            data: &data,
+        };
         let mut buf = [0u8; 4096];
         let n = sp.encode(&mut buf).unwrap();
         assert_eq!(n, 11 + 64 * 20);
@@ -467,7 +490,15 @@ mod tests {
     #[test]
     fn occupancy_mapping_roundtrip() {
         use OccupancyState::*;
-        for s in [Unknown, Empty, PossiblePresence, StaticPresence, Movement, StrongMovement, ComplexMovement] {
+        for s in [
+            Unknown,
+            Empty,
+            PossiblePresence,
+            StaticPresence,
+            Movement,
+            StrongMovement,
+            ComplexMovement,
+        ] {
             assert_eq!(occupancy_from_u8(occupancy_to_u8(s)), s);
         }
         assert_eq!(occupancy_from_u8(0), Unknown);

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The host-testable crates. The ESP32 firmware crates (firmware/radar_tx,
+  # firmware/radar_rx) are deliberately NOT in this list: they need the
+  # Espressif `esp` nightly-fork toolchain + ESP-IDF and build host-only on the
+  # dev machine (docs/verification.md). All `device`-featured code in the
+  # crates below is off by default, so they compile and test on a plain host.
+  HOST_CRATES: >-
+    radar_protocol radar_dsp radar_features radar_calibration
+    radar_transport radar_csi radar_storage radar_web radar_ota radar_rp2350
+
+jobs:
+  # Build + test each module as its own job (matrix).
+  module:
+    name: module / ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - radar_protocol
+          - radar_dsp
+          - radar_features
+          - radar_calibration
+          - radar_transport
+          - radar_csi
+          - radar_storage
+          - radar_web
+          - radar_ota
+          - radar_rp2350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build & test ${{ matrix.crate }}
+        run: cargo test -p ${{ matrix.crate }} --locked
+
+  # One integration job: the three radar roles (tx, rx1, rx2) as separate OS
+  # processes over loopback UDP — the inter-chip comms gate (14 assertions:
+  # RATE-1/2/3 framing, CRC, seq, pairing, fusion).
+  integration:
+    name: integration (inter-chip comms, 14 assertions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/integration
+      - name: Build integration tool
+        run: cd tools/integration && cargo build --locked
+      - name: Run three-role loopback orchestrate
+        run: cd tools/integration && ./target/debug/integration --orchestrate --duration 8 --rate 200
+
+  # Lint: rustfmt + clippy, scoped to the host crates (firmware never builds here).
+  lint:
+    name: lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt check
+        run: |
+          crates=$(echo "$HOST_CRATES" | sed 's/^/-p /; s/  */ -p /g')
+          cargo fmt $crates -- --check
+      - name: clippy (deny warnings)
+        run: |
+          crates=$(echo "$HOST_CRATES" | sed 's/^/-p /; s/  */ -p /g')
+          cargo clippy $crates --locked -- -D warnings

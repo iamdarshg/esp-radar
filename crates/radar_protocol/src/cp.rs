@@ -51,9 +51,9 @@ pub mod cap {
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HelloAck {
-    pub caps: u16,          // cap::* bitmask
-    pub max_rate_hz: u16,   // max stream rate it can sustain
-    pub fft_size_log2: u8,  // largest supported FFT, as log2
+    pub caps: u16,         // cap::* bitmask
+    pub max_rate_hz: u16,  // max stream rate it can sustain
+    pub fft_size_log2: u8, // largest supported FFT, as log2
     pub reserved: [u8; 3],
     pub fw_version: u32,
 }
@@ -94,7 +94,8 @@ pub fn build(dst: &mut [u8], hdr: &Header, payload: &[u8]) -> usize {
     let mut crc_hdr = h;
     crc_hdr.crc16 = 0;
     let crc = unsafe {
-        let src = core::slice::from_raw_parts((&crc_hdr as *const Header) as *const u8, HEADER_SIZE);
+        let src =
+            core::slice::from_raw_parts((&crc_hdr as *const Header) as *const u8, HEADER_SIZE);
         crc16_ext(crc16_ext(0, src), payload)
     };
     dst[HEADER_SIZE - 2..HEADER_SIZE].copy_from_slice(&crc.to_le_bytes());
@@ -119,7 +120,8 @@ pub fn parse(src: &[u8]) -> Option<(Header, &[u8])> {
     let mut crc_hdr = hdr;
     crc_hdr.crc16 = 0;
     let crc = unsafe {
-        let src = core::slice::from_raw_parts((&crc_hdr as *const Header) as *const u8, HEADER_SIZE);
+        let src =
+            core::slice::from_raw_parts((&crc_hdr as *const Header) as *const u8, HEADER_SIZE);
         crc16_ext(crc16_ext(0, src), payload)
     };
     if crc != stored {
@@ -149,7 +151,10 @@ mod tests {
             fw_version: 0x0100_0001,
         };
         let pl = unsafe {
-            core::slice::from_raw_parts((&ack as *const HelloAck) as *const u8, core::mem::size_of::<HelloAck>())
+            core::slice::from_raw_parts(
+                (&ack as *const HelloAck) as *const u8,
+                core::mem::size_of::<HelloAck>(),
+            )
         };
         let n = build(&mut buf, &hdr, pl);
         let (parsed, pl2) = parse(&buf[..n]).expect("parse");

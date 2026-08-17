@@ -12,7 +12,7 @@ pub struct Pca {
     k: usize,
     window: usize,
     n_components: usize,
-    buffer: Vec<Vec<f32>>,   // ring of observations
+    buffer: Vec<Vec<f32>>, // ring of observations
     head: usize,
     count: usize,
     components: Vec<Vec<f32>>, // eigenvectors (unit norm), k x n_components
@@ -135,10 +135,7 @@ impl Pca {
     pub fn project(&self, x: &[f32]) -> Vec<f32> {
         let mean = self.mean();
         let centered: Vec<f32> = x.iter().zip(mean.iter()).map(|(a, b)| a - b).collect();
-        self.components
-            .iter()
-            .map(|c| dot(&centered, c))
-            .collect()
+        self.components.iter().map(|c| dot(&centered, c)).collect()
     }
 
     /// Normalized component vectors (unit length).

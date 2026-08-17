@@ -62,9 +62,9 @@ pub struct LinkFeatures {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FusionMetrics {
     pub fused_energy: f32,
-    pub cross_link_corr: f32,   // -1..1
-    pub activity_ratio: f32,    // r1.activity / r2.activity
-    pub differential_rms: f32,  // RMS of (r1 - r2) band-passed series
+    pub cross_link_corr: f32,  // -1..1
+    pub activity_ratio: f32,   // r1.activity / r2.activity
+    pub differential_rms: f32, // RMS of (r1 - r2) band-passed series
     pub pca_spectral_entropy: f32,
 }
 
@@ -190,10 +190,8 @@ impl OccupancyEstimator {
         }
         self.last_energy = e;
 
-        if self.hold >= self.params.hold_frames {
-            if self.state != self.pending {
-                self.state = self.pending;
-            }
+        if self.hold >= self.params.hold_frames && self.state != self.pending {
+            self.state = self.pending;
         }
 
         self.history.push(self.state);
@@ -214,10 +212,14 @@ impl OccupancyEstimator {
     fn confidence(&self, candidate: OccupancyState, dev: f32, energy: f32) -> f32 {
         let p = &self.params;
         let margin = match candidate {
-            OccupancyState::Empty => ((p.empty_thresh - energy) / p.empty_thresh.max(1e-6)).clamp(0.0, 1.0),
+            OccupancyState::Empty => {
+                ((p.empty_thresh - energy) / p.empty_thresh.max(1e-6)).clamp(0.0, 1.0)
+            }
             OccupancyState::PossiblePresence => (energy / p.move_thresh).min(1.0),
             OccupancyState::StaticPresence => (dev / (p.static_thresh * 2.0)).min(1.0),
-            OccupancyState::Movement => ((energy - p.move_thresh) / p.strong_thresh).clamp(0.0, 1.0),
+            OccupancyState::Movement => {
+                ((energy - p.move_thresh) / p.strong_thresh).clamp(0.0, 1.0)
+            }
             OccupancyState::StrongMovement | OccupancyState::ComplexMovement => {
                 ((energy - p.strong_thresh) / (p.strong_thresh + 1.0)).clamp(0.0, 1.0)
             }
@@ -244,7 +246,10 @@ pub struct Fuser {
 
 impl Fuser {
     pub fn new(cap: usize) -> Self {
-        Self { buf: Vec::with_capacity(cap.max(2)), cap: cap.max(2) }
+        Self {
+            buf: Vec::with_capacity(cap.max(2)),
+            cap: cap.max(2),
+        }
     }
 
     /// Push one frame of per-link band-passed energy and get fused metrics.

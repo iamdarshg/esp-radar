@@ -29,17 +29,17 @@ pub const MAX_CSI_LEN: usize = 256;
 /// Metadata extracted in the CSI callback.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CsiInfo {
-    pub rssi: i16,           // dBm (from rx_ctrl bitfield)
-    pub noise_floor: i16,    // dBm (from rx_ctrl bitfield)
-    pub channel: i8,         // primary channel
-    pub sig_mode: u8,        // 0 = non-HT, 1 = HT
+    pub rssi: i16,        // dBm (from rx_ctrl bitfield)
+    pub noise_floor: i16, // dBm (from rx_ctrl bitfield)
+    pub channel: i8,      // primary channel
+    pub sig_mode: u8,     // 0 = non-HT, 1 = HT
     pub mcs: u8,
-    pub cwb: u8,             // 0 = 20 MHz, 1 = 40 MHz
+    pub cwb: u8, // 0 = 20 MHz, 1 = 40 MHz
     pub timestamp_us: u32,
     pub sig_len: u16,
     pub first_word_invalid: bool,
-    pub mac: [u8; 6],        // source MAC of the CSI packet
-    pub rx_seq: u16,         // packet rx sequence number (pairs with TX seq)
+    pub mac: [u8; 6], // source MAC of the CSI packet
+    pub rx_seq: u16,  // packet rx sequence number (pairs with TX seq)
 }
 
 /// One raw CSI observation, owned by the consumer task.
@@ -66,8 +66,8 @@ struct Slot {
 pub struct CsiRing {
     slots: UnsafeCell<Box<[Slot]>>,
     cap: usize,
-    head: AtomicUsize,   // next slot the producer fills
-    tail: AtomicUsize,   // next slot the consumer reads
+    head: AtomicUsize, // next slot the producer fills
+    tail: AtomicUsize, // next slot the consumer reads
     overflow: AtomicUsize,
 }
 
@@ -178,7 +178,13 @@ mod tests {
     fn overflow_drops_without_panic() {
         let ring = CsiRing::new(2); // cap 2 → at most 1 occupied slot
         for i in 0..100u32 {
-            ring.push(CsiInfo { rx_seq: i as u16, ..Default::default() }, &[1, 2, 3]);
+            ring.push(
+                CsiInfo {
+                    rx_seq: i as u16,
+                    ..Default::default()
+                },
+                &[1, 2, 3],
+            );
         }
         // Ring can hold at most 1 frame; 99 were dropped.
         assert_eq!(ring.overflow_count(), 99);

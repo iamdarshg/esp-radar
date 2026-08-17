@@ -264,7 +264,11 @@ impl TxPowerModel {
             ss_res += (y - pred) * (y - pred);
             ss_tot += (y - mean_y) * (y - mean_y);
         }
-        let r2 = if ss_tot > 1e-12 { 1.0 - ss_res / ss_tot } else { 0.0 };
+        let r2 = if ss_tot > 1e-12 {
+            1.0 - ss_res / ss_tot
+        } else {
+            0.0
+        };
 
         Some(Self {
             slope: slope as f32,
@@ -363,7 +367,12 @@ impl ClassThresholds {
     pub fn to_bytes(&self) -> [u8; Self::SERIALIZED_LEN] {
         let mut out = [0u8; Self::SERIALIZED_LEN];
         let mut o = 0;
-        for v in [self.empty_thresh, self.move_thresh, self.strong_thresh, self.static_thresh] {
+        for v in [
+            self.empty_thresh,
+            self.move_thresh,
+            self.strong_thresh,
+            self.static_thresh,
+        ] {
             out[o..o + 4].copy_from_slice(&v.to_le_bytes());
             o += 4;
         }
@@ -446,7 +455,11 @@ mod tests {
     #[test]
     fn baseline_requires_min_samples() {
         let mut c = BaselineCollector::new();
-        let ch = Channel { amps: [1.0; 56], valid: true, ..Default::default() };
+        let ch = Channel {
+            amps: [1.0; 56],
+            valid: true,
+            ..Default::default()
+        };
         for _ in 0..50 {
             c.update(&ch, -50);
         }
@@ -459,11 +472,19 @@ mod tests {
         // Perfectly linear: rssi = power - 50.
         let points: Vec<SweepPoint> = [4i16, 20, 40, 60, 78]
             .iter()
-            .map(|&p| SweepPoint { tx_power_db: p, rssi: p - 50, ..Default::default() })
+            .map(|&p| SweepPoint {
+                tx_power_db: p,
+                rssi: p - 50,
+                ..Default::default()
+            })
             .collect();
         let m = TxPowerModel::fit(&points).expect("fit");
         assert!((m.slope - 1.0).abs() < 1e-3, "slope {}", m.slope);
-        assert!((m.intercept - -50.0).abs() < 0.1, "intercept {}", m.intercept);
+        assert!(
+            (m.intercept - -50.0).abs() < 0.1,
+            "intercept {}",
+            m.intercept
+        );
         assert!(m.r2 > 0.99);
         // To keep RSSI at -45 we should pick TX power ≈ +5 (rssi = p - 50).
         let p = m.power_for_rssi(-45.0);
@@ -472,13 +493,22 @@ mod tests {
 
     #[test]
     fn tx_power_fit_needs_two_points() {
-        let one = [SweepPoint { tx_power_db: 20, rssi: -30, ..Default::default() }];
+        let one = [SweepPoint {
+            tx_power_db: 20,
+            rssi: -30,
+            ..Default::default()
+        }];
         assert!(TxPowerModel::fit(&one).is_none());
     }
 
     #[test]
     fn tx_power_model_roundtrip() {
-        let m = TxPowerModel { slope: 0.98, intercept: -51.5, r2: 0.992, n_points: 5 };
+        let m = TxPowerModel {
+            slope: 0.98,
+            intercept: -51.5,
+            r2: 0.992,
+            n_points: 5,
+        };
         let bytes = m.to_bytes();
         let c = TxPowerModel::from_bytes(&bytes);
         assert!((c.slope - 0.98).abs() < 1e-6);

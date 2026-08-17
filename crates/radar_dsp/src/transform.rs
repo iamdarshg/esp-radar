@@ -49,7 +49,12 @@ pub fn subcarrier_khz() -> [f32; N_SUBCARRIERS] {
 /// `buf` must contain at least `2 * max_bin` bytes. `first_word_invalid` skips
 /// the first two complex samples (hardware limitation, ESP32). `rssi` and
 /// `noise_floor` are copied from the packet radio metadata.
-pub fn decode_channel(buf: &[i8], first_word_invalid: bool, rssi: i16, noise_floor: i16) -> Channel {
+pub fn decode_channel(
+    buf: &[i8],
+    first_word_invalid: bool,
+    rssi: i16,
+    noise_floor: i16,
+) -> Channel {
     let bins = valid_bins();
     let max_bin = *bins.iter().max().unwrap_or(&0);
     let needed = (max_bin + 1) * 2; // I/Q i8 pair per bin
@@ -142,14 +147,11 @@ impl Normalizer {
 /// denoise step for visualization.
 pub fn spatial_smooth(amps: &[f32; N_SUBCARRIERS], radius: usize) -> [f32; N_SUBCARRIERS] {
     let mut out = [0.0f32; N_SUBCARRIERS];
-    for i in 0..N_SUBCARRIERS {
+    for (i, slot) in out.iter_mut().enumerate() {
         let lo = i.saturating_sub(radius);
         let hi = (i + radius).min(N_SUBCARRIERS - 1);
-        let mut sum = 0.0;
-        for j in lo..=hi {
-            sum += amps[j];
-        }
-        out[i] = sum / (hi - lo + 1) as f32;
+        let sum: f32 = amps[lo..=hi].iter().sum();
+        *slot = sum / (hi - lo + 1) as f32;
     }
     out
 }
@@ -182,7 +184,11 @@ mod tests {
         assert!((ch.amps[0] - 100.0).abs() < 0.01);
         assert!((ch.mean_amp() - 100.0).abs() < 0.01);
         // Sanitized phase of a constant channel is ~0.
-        assert!(ch.phase.iter().all(|p| p.abs() < 1e-3), "phase {:?}", &ch.phase[..4]);
+        assert!(
+            ch.phase.iter().all(|p| p.abs() < 1e-3),
+            "phase {:?}",
+            &ch.phase[..4]
+        );
     }
 
     #[test]

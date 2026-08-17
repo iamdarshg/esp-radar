@@ -41,7 +41,9 @@ pub struct FrameDecoder {
 
 impl FrameDecoder {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(256) }
+        Self {
+            buf: Vec::with_capacity(256),
+        }
     }
 
     /// Append freshly-received bytes. No framing work happens here; call
@@ -55,7 +57,9 @@ impl FrameDecoder {
     }
 
     /// Pull the next complete, CRC-valid frame out of the buffer, if any.
-    /// Scans forward past garbage and never blocks.
+    /// Scans forward past garbage and never blocks. Named `next` for the
+    /// frame-stream caller, not `Iterator::next`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Frame> {
         loop {
             if self.buf.len() < cp::HEADER_SIZE {
@@ -85,7 +89,10 @@ impl FrameDecoder {
                     // before we mutate it below.
                     let payload_owned = payload.to_vec();
                     self.buf.drain(..total);
-                    return Some(Frame { header, payload: payload_owned });
+                    return Some(Frame {
+                        header,
+                        payload: payload_owned,
+                    });
                 }
                 None => {
                     // False magic match or corrupted frame: resync one byte.

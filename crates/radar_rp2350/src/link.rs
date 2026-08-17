@@ -7,12 +7,12 @@
 
 use esp_idf_hal::delay::TickType;
 use esp_idf_hal::gpio::{Gpio16, Gpio17};
-use esp_idf_hal::units::Hertz;
 use esp_idf_hal::uart::{self, UartDriver};
+use esp_idf_hal::units::Hertz;
 use radar_protocol::cp;
 
 use crate::framer::{Frame, FrameDecoder, MAX_FRAME};
-use crate::session::{Seq, compatible};
+use crate::session::{compatible, Seq};
 
 /// Default link baud rate. 921600 keeps a full 1 KiB payload under ~9 ms on
 /// the wire, so pushing telemetry is effectively non-blocking.
@@ -86,7 +86,12 @@ impl Link {
             // the link loop reads it.
             .rx_fifo_size(2 * cp::MAX_PAYLOAD);
         let uart = UartDriver::new(uart2, tx, rx, None::<Gpio17>, None::<Gpio17>, &config)?;
-        Ok(Self { uart, decoder: FrameDecoder::new(), seq: Seq::new(), present: false })
+        Ok(Self {
+            uart,
+            decoder: FrameDecoder::new(),
+            seq: Seq::new(),
+            present: false,
+        })
     }
 
     /// Best-effort presence probe: send HELLO, wait for HELLO_ACK. Any outcome
@@ -223,7 +228,8 @@ impl Link {
 
     /// Blocking UART read with a short poll window; returns bytes read.
     fn read_chunk(&self, buf: &mut [u8]) -> Result<usize, esp_idf_sys::EspError> {
-        self.uart.read(buf, TickType::new_millis(READ_POLL_MS).ticks())
+        self.uart
+            .read(buf, TickType::new_millis(READ_POLL_MS).ticks())
     }
 
     /// Keep reading until a frame with `wanted` kind arrives or `timeout_ms`

@@ -113,23 +113,32 @@ impl Dashboard {
             resp.write_all(INDEX_HTML.as_bytes())?;
             Ok(())
         })?;
-        server.fn_handler("/app.js", Method::Get, |request| -> Result<(), EspIOError> {
-            let mut resp = request.into_response(200, Some("OK"), &[("Content-Type", CT_JS)])?;
-            resp.write_all(APP_JS.as_bytes())?;
-            Ok(())
-        })?;
+        server.fn_handler(
+            "/app.js",
+            Method::Get,
+            |request| -> Result<(), EspIOError> {
+                let mut resp =
+                    request.into_response(200, Some("OK"), &[("Content-Type", CT_JS)])?;
+                resp.write_all(APP_JS.as_bytes())?;
+                Ok(())
+            },
+        )?;
 
         // JSON status snapshot (no WebSocket required).
         let status_http = status.clone();
-        server.fn_handler("/status", Method::Get, move |request| -> Result<(), EspIOError> {
-            let snap = status_http.lock().unwrap();
-            let body = snap.to_json();
-            drop(snap);
-            let mut resp =
-                request.into_response(200, Some("OK"), &[("Content-Type", CT_JSON)])?;
-            resp.write_all(body.as_bytes())?;
-            Ok(())
-        })?;
+        server.fn_handler(
+            "/status",
+            Method::Get,
+            move |request| -> Result<(), EspIOError> {
+                let snap = status_http.lock().unwrap();
+                let body = snap.to_json();
+                drop(snap);
+                let mut resp =
+                    request.into_response(200, Some("OK"), &[("Content-Type", CT_JSON)])?;
+                resp.write_all(body.as_bytes())?;
+                Ok(())
+            },
+        )?;
 
         // WebSocket telemetry: register a detached sender per connection.
         let broadcast = TelemetryBroadcaster::default();
@@ -147,7 +156,11 @@ impl Dashboard {
 
         log::info!("dashboard server up on http://192.168.4.1:80 (ws /ws, json /status)");
 
-        Ok(Self { _server: server, status, broadcast })
+        Ok(Self {
+            _server: server,
+            status,
+            broadcast,
+        })
     }
 
     /// Push a raw telemetry frame to all dashboards. Returns live client count.

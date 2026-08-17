@@ -68,7 +68,10 @@ impl core::ops::Sub for Complex {
 impl core::ops::Mul for Complex {
     type Output = Complex;
     fn mul(self, o: Complex) -> Complex {
-        Complex::new(self.re * o.re - self.im * o.im, self.re * o.im + self.im * o.re)
+        Complex::new(
+            self.re * o.re - self.im * o.im,
+            self.re * o.im + self.im * o.re,
+        )
     }
 }
 

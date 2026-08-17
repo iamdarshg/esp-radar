@@ -64,10 +64,7 @@ pub fn ifft_inplace(buf: &mut [Complex]) {
 /// Magnitude spectrum (first `n/2` bins).
 pub fn magnitude_spectrum(signal: &[f32]) -> Vec<f32> {
     let n = next_pow2(signal.len());
-    let mut buf: Vec<Complex> = signal
-        .iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .collect();
+    let mut buf: Vec<Complex> = signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
     buf.resize(n, Complex::default());
     fft_inplace(&mut buf);
     buf[..n / 2].iter().map(|c| c.mag()).collect()
@@ -76,10 +73,7 @@ pub fn magnitude_spectrum(signal: &[f32]) -> Vec<f32> {
 /// Power spectrum (|X|^2), first `n/2` bins.
 pub fn power_spectrum(signal: &[f32]) -> Vec<f32> {
     let n = next_pow2(signal.len());
-    let mut buf: Vec<Complex> = signal
-        .iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .collect();
+    let mut buf: Vec<Complex> = signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
     buf.resize(n, Complex::default());
     fft_inplace(&mut buf);
     buf[..n / 2]
@@ -150,9 +144,13 @@ mod tests {
     #[test]
     fn spectrum_dominant_bin() {
         // A pure tone at 2 cycles across 64 samples → peak at bin 2.
-        let signal: Vec<f32> = (0..64).map(|i| ((i as f32) * 2.0 * core::f32::consts::PI * 2.0 / 64.0).sin()).collect();
+        let signal: Vec<f32> = (0..64)
+            .map(|i| ((i as f32) * 2.0 * core::f32::consts::PI * 2.0 / 64.0).sin())
+            .collect();
         let spec = power_spectrum(&signal);
-        let peak = (1..spec.len()).max_by(|&a, &b| spec[a].partial_cmp(&spec[b]).unwrap()).unwrap();
+        let peak = (1..spec.len())
+            .max_by(|&a, &b| spec[a].partial_cmp(&spec[b]).unwrap())
+            .unwrap();
         assert_eq!(peak, 2);
     }
 }

@@ -17,7 +17,9 @@
 //! bindgen's field names, and cast to `*const sys::sockaddr` for the FFI call
 //! — the layouts are identical.
 
-use crate::{Ipv4Addr, build_cal_resp, build_csi_snapshot, build_data_frame, build_feature_report, node};
+use crate::{
+    build_cal_resp, build_csi_snapshot, build_data_frame, build_feature_report, node, Ipv4Addr,
+};
 use core::ffi::c_void;
 use esp_idf_sys as sys;
 use radar_protocol::{CalResp, CsiSnapshot, FeatureReport};
@@ -114,7 +116,13 @@ impl UdpSocket {
             return Err(UdpError::Open(fd));
         }
         let addr = SockAddrIn::any(port);
-        let rc = unsafe { sys::lwip_bind(fd, addr.as_ptr(), core::mem::size_of::<SockAddrIn>() as sys::socklen_t) };
+        let rc = unsafe {
+            sys::lwip_bind(
+                fd,
+                addr.as_ptr(),
+                core::mem::size_of::<SockAddrIn>() as sys::socklen_t,
+            )
+        };
         if rc < 0 {
             unsafe { sys::lwip_close(fd) };
             return Err(UdpError::Open(rc));
